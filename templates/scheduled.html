@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+{% block title %}Scheduled Scans - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📅 Scheduled Scans</h1>
+    <div class="header-actions">
+        <button id="refresh-btn" class="btn btn-primary" onclick="refreshScheduled()">
+            🔄 Refresh from Qualys
+        </button>
+    </div>
+</div>
+
+<div class="filter-bar">
+    <input type="text" id="search-input" class="search-input" 
+           placeholder="Search by title, target, or owner..." oninput="filterScans()">
+    <select id="status-filter" class="filter-select" onchange="filterScans()">
+        <option value="">All Status</option>
+        <option value="active">Active</option>
+        <option value="inactive">Inactive</option>
+    </select>
+</div>
+
+<div id="scans-container" class="table-container">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Target</th>
+                <th>Schedule</th>
+                <th>Next Launch</th>
+                <th>Last Launch</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="scans-tbody">
+            <tr>
+                <td colspan="7" class="loading-cell">Loading scheduled scans...</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div id="empty-state" class="empty-state hidden">
+    <div class="empty-icon">📅</div>
+    <h2>No Scheduled Scans</h2>
+    <p>Click "Refresh from Qualys" to load scheduled scans.</p>
+</div>
+
+<!-- Action Modal -->
+<div id="action-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modal-title">Stage Action</h3>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p id="modal-description"></p>
+            <label for="reason-input">Reason (optional):</label>
+            <textarea id="reason-input" rows="2" placeholder="Why are you making this change?"></textarea>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button id="modal-confirm" class="btn btn-primary">Stage Change</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let allScans = [];
+    let currentAction = null;
+    
+    // Load scans on page load
+    document.addEventListener('DOMContentLoaded', loadScans);
+    
+    async function loadScans() {
+        try {
+            const response = await fetch('/api/scheduled');
+            const result = await response.json();
+            
+            if (result.success) {
+                allScans = result.data;
+                renderScans(allScans);
+            } else {
+                showToast('Failed to load scans: ' + result.error, 'error');
+            }
+        } catch (err) {
+            showToast('Network error loading scans', 'error');
+        }
+    }
+    
+    async function refreshScheduled() {
+        const btn = document.getElementById('refresh-btn');
+        btn.disabled = true;
+        btn.textContent = '⏳ Refreshing...';
+        
+        try {
+            const response = await fetch('/api/scheduled/refresh', { method: 'POST' });
+            const result = await response.json();
+            
+            if (result.success) {
+                showToast(`Refreshed ${result.data.refreshed} scheduled scans`, 'success');
+                await loadScans();
+            } else {
+                showToast('Refresh failed: ' + result.error, 'error');
+            }
+        } catch (err) {
+            showToast('Network error during refresh', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '🔄 Refresh from Qualys';
+        }
+    }
+    
+    function renderScans(scans) {
+        const tbody = document.getElementById('scans-tbody');
+        const emptyState = document.getElementById('empty-state');
+        const container = document.getElementById('scans-container');
+        
+        if (scans.length === 0) {
+            container.classList.add('hidden');
+            emptyState.classList.remove('hidden');
+            return;
+        }
+        
+        container.classList.remove('hidden');
+        emptyState.classList.add('hidden');
+        
+        tbody.innerHTML = scans.map(scan => `
+            <tr data-id="${scan.id}">
+                <td>
+                    <strong>${escapeHtml(scan.title || 'Untitled')}</strong>
+                    <br><small class="text-muted">${escapeHtml(scan.option_profile || '')}</small>
+                </td>
+                <td class="target-cell">${escapeHtml(scan.target || 'N/A')}</td>
+                <td>${escapeHtml(scan.schedule || 'N/A')}</td>
+                <td>${formatDate(scan.next_launch)}</td>
+                <td>${formatDate(scan.last_launch)}</td>
+                <td>
+                    <span class="status-badge ${scan.active ? 'status-active' : 'status-inactive'}">
+                        ${scan.active ? '✓ Active' : '○ Inactive'}
+                    </span>
+                </td>
+                <td class="actions-cell">
+                    ${getActionButtons(scan)}
+                </td>
+            </tr>
+        `).join('');
+    }
+    
+    function getActionButtons(scan) {
+        const buttons = [];
+        
+        if (scan.active) {
+            buttons.push(`
+                <button class="btn btn-small btn-warning" 
+                        onclick="openActionModal('deactivate', '${scan.id}', '${escapeHtml(scan.title)}')"
+                        title="Stage deactivation">
+                    ⏸️ Deactivate
+                </button>
+            `);
+        } else {
+            buttons.push(`
+                <button class="btn btn-small btn-success" 
+                        onclick="openActionModal('activate', '${scan.id}', '${escapeHtml(scan.title)}')"
+                        title="Stage activation">
+                    ▶️ Activate
+                </button>
+            `);
+        }
+        
+        buttons.push(`
+            <button class="btn btn-small btn-danger" 
+                    onclick="openActionModal('delete', '${scan.id}', '${escapeHtml(scan.title)}')"
+                    title="Stage deletion">
+                🗑️ Delete
+            </button>
+        `);
+        
+        return buttons.join(' ');
+    }
+    
+    function filterScans() {
+        const searchTerm = document.getElementById('search-input').value.toLowerCase();
+        const statusFilter = document.getElementById('status-filter').value;
+        
+        const filtered = allScans.filter(scan => {
+            const matchesSearch = !searchTerm || 
+                (scan.title || '').toLowerCase().includes(searchTerm) ||
+                (scan.target || '').toLowerCase().includes(searchTerm) ||
+                (scan.owner || '').toLowerCase().includes(searchTerm);
+            
+            const matchesStatus = !statusFilter ||
+                (statusFilter === 'active' && scan.active) ||
+                (statusFilter === 'inactive' && !scan.active);
+            
+            return matchesSearch && matchesStatus;
+        });
+        
+        renderScans(filtered);
+    }
+    
+    function openActionModal(action, scanId, title) {
+        currentAction = { action, scanId, title };
+        
+        const modal = document.getElementById('action-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalDesc = document.getElementById('modal-description');
+        const confirmBtn = document.getElementById('modal-confirm');
+        
+        const actions = {
+            activate: {
+                title: 'Stage Activation',
+                desc: `Stage activation of scheduled scan: "${title}"`,
+                btnClass: 'btn-success',
+                btnText: 'Stage Activation'
+            },
+            deactivate: {
+                title: 'Stage Deactivation',
+                desc: `Stage deactivation of scheduled scan: "${title}"`,
+                btnClass: 'btn-warning',
+                btnText: 'Stage Deactivation'
+            },
+            delete: {
+                title: 'Stage Deletion',
+                desc: `Stage deletion of scheduled scan: "${title}". This action cannot be undone once applied.`,
+                btnClass: 'btn-danger',
+                btnText: 'Stage Deletion'
+            }
+        };
+        
+        const config = actions[action];
+        modalTitle.textContent = config.title;
+        modalDesc.textContent = config.desc;
+        confirmBtn.className = `btn ${config.btnClass}`;
+        confirmBtn.textContent = config.btnText;
+        confirmBtn.onclick = confirmAction;
+        
+        document.getElementById('reason-input').value = '';
+        modal.classList.remove('hidden');
+    }
+    
+    function closeModal() {
+        document.getElementById('action-modal').classList.add('hidden');
+        currentAction = null;
+    }
+    
+    async function confirmAction() {
+        if (!currentAction) return;
+        
+        const reason = document.getElementById('reason-input').value;
+        const btn = document.getElementById('modal-confirm');
+        btn.disabled = true;
+        
+        try {
+            const response = await fetch('/api/stage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: currentAction.action,
+                    scan_ref: currentAction.scanId,
+                    title: currentAction.title,
+                    reason: reason
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                showToast(`Staged: ${currentAction.action} for "${currentAction.title}"`, 'success');
+                closeModal();
+                updateStagingBadge();
+            } else {
+                showToast('Failed to stage: ' + result.error, 'error');
+            }
+        } catch (err) {
+            showToast('Network error staging action', 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+    
+    function formatDate(dateStr) {
+        if (!dateStr) return 'N/A';
+        try {
+            const date = new Date(dateStr);
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        } catch {
+            return dateStr;
+        }
+    }
+    
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+</script>
+{% endblock %}

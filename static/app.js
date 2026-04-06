@@ -1,0 +1,147 @@
+/* ============================================================
+   Qualys Scan Manager - JavaScript
+   ============================================================ */
+
+// ============================================================
+// THEME
+// ============================================================
+
+function initTheme() {
+    const saved = localStorage.getItem('theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const theme = saved || (prefersDark ? 'dark' : 'light');
+    
+    document.documentElement.setAttribute('data-theme', theme);
+    updateThemeButton(theme);
+}
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+    updateThemeButton(next);
+}
+
+function updateThemeButton(theme) {
+    const btn = document.getElementById('theme-toggle');
+    if (btn) {
+        btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+    }
+}
+
+// ============================================================
+// CONNECTION STATUS
+// ============================================================
+
+async function checkConnection() {
+    const dot = document.getElementById('connection-status');
+    if (!dot) return;
+    
+    try {
+        const res = await fetch('/api/health');
+        const json = await res.json();
+        
+        if (json.success && json.data.status === 'connected') {
+            dot.classList.add('connected');
+            dot.classList.remove('error');
+            dot.title = `Connected to ${json.data.api_url}`;
+        } else {
+            dot.classList.add('error');
+            dot.classList.remove('connected');
+            dot.title = json.data.message || 'Not connected';
+        }
+    } catch (e) {
+        dot.classList.add('error');
+        dot.classList.remove('connected');
+        dot.title = 'Connection error';
+    }
+}
+
+// ============================================================
+// STAGING BADGE
+// ============================================================
+
+async function updateStagingBadge() {
+    const badge = document.getElementById('staging-badge');
+    if (!badge) return;
+    
+    try {
+        const res = await fetch('/api/staged');
+        const json = await res.json();
+        
+        if (json.success && json.data.length > 0) {
+            badge.textContent = json.data.length;
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+    } catch (e) {
+        badge.classList.add('hidden');
+    }
+}
+
+// ============================================================
+// TOAST NOTIFICATIONS
+// ============================================================
+
+function showToast(message, type = 'info') {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+    
+    toast.textContent = message;
+    toast.className = `toast ${type}`;
+    
+    // Auto hide after 4 seconds
+    setTimeout(() => {
+        toast.classList.add('hidden');
+    }, 4000);
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return '';
+    try {
+        const date = new Date(dateStr);
+        return date.toLocaleString(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch (e) {
+        return dateStr;
+    }
+}
+
+// ============================================================
+// INITIALIZATION
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
+    checkConnection();
+    updateStagingBadge();
+    
+    // Theme toggle
+    const themeBtn = document.getElementById('theme-toggle');
+    if (themeBtn) {
+        themeBtn.addEventListener('click', toggleTheme);
+    }
+    
+    // Refresh connection status periodically
+    setInterval(checkConnection, 60000);
+    setInterval(updateStagingBadge, 30000);
+});

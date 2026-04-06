@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Qualys Scan Manager{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="nav-icon">🔒</span>
+            <span class="nav-title">Qualys Scan Manager</span>
+        </div>
+        <div class="nav-links">
+            <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
+                📊 Dashboard
+            </a>
+            <a href="{{ url_for('scheduled_page') }}" class="nav-link {% if request.endpoint == 'scheduled_page' %}active{% endif %}">
+                📅 Scheduled
+            </a>
+            <a href="{{ url_for('scans_page') }}" class="nav-link {% if request.endpoint == 'scans_page' %}active{% endif %}">
+                🔍 Recent
+            </a>
+            <a href="{{ url_for('staging_page') }}" class="nav-link {% if request.endpoint == 'staging_page' %}active{% endif %}">
+                📋 Staging
+                <span id="staging-badge" class="badge hidden">0</span>
+            </a>
+            <a href="{{ url_for('tags_page') }}" class="nav-link {% if request.endpoint == 'tags_page' %}active{% endif %}">
+                🏷️ Tags
+            </a>
+        </div>
+        <div class="nav-actions">
+            <button id="theme-toggle" class="btn btn-icon" title="Toggle theme">🌙</button>
+            <span id="connection-status" class="status-dot" title="Checking..."></span>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

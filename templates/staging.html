@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+
+{% block title %}Staging - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📋 Staged Changes</h1>
+    <div class="header-actions">
+        <button class="btn btn-secondary" onclick="discardAll()" id="discard-all-btn">
+            🗑️ Discard All
+        </button>
+        <button class="btn btn-success btn-lg" onclick="applyAll()" id="apply-btn">
+            🚀 Make It So
+        </button>
+    </div>
+</div>
+
+<div class="alert alert-info" id="staging-info">
+    <strong>How staging works:</strong> Actions staged here won't be applied until you click "Make It So". 
+    Review all changes, discard any you don't want, then apply. Works for both running scans and scheduled scans.
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <table class="table" id="staging-table">
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Action</th>
+                    <th>Scan</th>
+                    <th>Description</th>
+                    <th>Staged At</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="staging-tbody">
+                <tr>
+                    <td colspan="6" class="text-muted text-center">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Results Modal -->
+<div id="results-modal" class="modal hidden">
+    <div class="modal-backdrop" onclick="closeResultsModal()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Apply Results</h3>
+            <button class="btn btn-icon" onclick="closeResultsModal()">✕</button>
+        </div>
+        <div class="modal-body" id="results-body">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-primary" onclick="closeResultsModal()">Close</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let stagedChanges = [];
+
+document.addEventListener('DOMContentLoaded', loadStaged);
+
+async function loadStaged() {
+    try {
+        const res = await fetch('/api/staged');
+        const json = await res.json();
+        
+        const tbody = document.getElementById('staging-tbody');
+        
+        if (!json.success || !json.data.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">No staged changes. Go to Scheduled or Recent scans to stage actions.</td></tr>';
+            document.getElementById('apply-btn').disabled = true;
+            document.getElementById('discard-all-btn').disabled = true;
+            return;
+        }
+        
+        stagedChanges = json.data;
+        document.getElementById('apply-btn').disabled = false;
+        document.getElementById('discard-all-btn').disabled = false;
+        
+        renderStaged(stagedChanges);
+        updateStagingBadge();
+        
+    } catch (e) {
+        console.error('Failed to load staged changes:', e);
+    }
+}
+
+function renderStaged(changes) {
+    const tbody = document.getElementById('staging-tbody');
+    
+    // Action styling based on type
+    const actionClasses = {
+        'pause': 'btn-warning',
+        'resume': 'btn-success',
+        'cancel': 'btn-danger',
+        'activate': 'btn-success',
+        'deactivate': 'btn-warning',
+        'delete': 'btn-danger'
+    };
+    
+    // Scan type icons
+    const typeIcons = {
+        'scan': '🔍',
+        'scheduled': '📅'
+    };
+    
+    tbody.innerHTML = changes.map(change => `
+        <tr>
+            <td>
+                <span class="type-badge ${change.scan_type || 'scan'}">
+                    ${typeIcons[change.scan_type] || '🔍'} ${change.scan_type === 'scheduled' ? 'Scheduled' : 'Running'}
+                </span>
+            </td>
+            <td>
+                <span class="btn btn-sm ${actionClasses[change.action] || ''}" style="pointer-events:none">
+                    ${change.action.toUpperCase()}
+                </span>
+            </td>
+            <td>
+                <div class="scan-ref">${escapeHtml(change.scan_ref)}</div>
+            </td>
+            <td>${escapeHtml(change.description || '—')}</td>
+            <td>${formatDate(change.staged_at)}</td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="discardChange(${change.id})" title="Discard">
+                    🗑️
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function discardChange(changeId) {
+    try {
+        const res = await fetch(`/api/staged/${changeId}`, { method: 'DELETE' });
+        const json = await res.json();
+        
+        if (json.success) {
+            showToast('Change discarded', 'success');
+            loadStaged();
+        } else {
+            showToast(json.error || 'Failed to discard', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function discardAll() {
+    if (!confirm('Discard all staged changes?')) return;
+    
+    try {
+        const res = await fetch('/api/staged/all', { method: 'DELETE' });
+        const json = await res.json();
+        
+        if (json.success) {
+            showToast(`Discarded ${json.data.discarded} changes`, 'success');
+            loadStaged();
+        } else {
+            showToast(json.error || 'Failed to discard', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function applyAll() {
+    const btn = document.getElementById('apply-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Applying...';
+    
+    try {
+        const res = await fetch('/api/apply', { method: 'POST' });
+        const json = await res.json();
+        
+        if (json.success) {
+            const data = json.data;
+            showResultsModal(data);
+            loadStaged();
+        } else {
+            showToast(json.error || 'Apply failed', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🚀 Make It So';
+    }
+}
+
+function showResultsModal(results) {
+    const body = document.getElementById('results-body');
+    
+    let html = `
+        <div class="results-summary">
+            <div class="result-stat result-success">
+                <div class="result-value">${results.success}</div>
+                <div class="result-label">Succeeded</div>
+            </div>
+            <div class="result-stat result-failed">
+                <div class="result-value">${results.failed}</div>
+                <div class="result-label">Failed</div>
+            </div>
+        </div>
+    `;
+    
+    if (results.details && results.details.length) {
+        html += '<div class="results-details"><h4>Details:</h4><ul>';
+        for (const d of results.details) {
+            const icon = d.status === 'success' ? '✅' : '❌';
+            const typeLabel = d.scan_type === 'scheduled' ? '(Scheduled)' : '';
+            html += `<li>${icon} ${d.action} ${d.scan_ref} ${typeLabel}`;
+            if (d.error) html += ` — <span class="text-danger">${escapeHtml(d.error)}</span>`;
+            html += '</li>';
+        }
+        html += '</ul></div>';
+    }
+    
+    body.innerHTML = html;
+    document.getElementById('results-modal').classList.remove('hidden');
+}
+
+function closeResultsModal() {
+    document.getElementById('results-modal').classList.add('hidden');
+}
+</script>
+{% endblock %}

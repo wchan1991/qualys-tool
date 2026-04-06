@@ -1,0 +1,50 @@
+# ============================================================
+# QUALYS API CONFIGURATION
+# ============================================================
+# 
+# SETUP:
+# 1. Copy this file to '.config' (same folder)
+# 2. Fill in your credentials
+# 3. Secure: chmod 600 config/.config (Linux/Mac)
+#
+# IMPORTANT: Do NOT wrap values in quotes!
+#   CORRECT:   base_url = https://qualysapi.qualys.com
+#   WRONG:     base_url = "https://qualysapi.qualys.com"
+#
+# ENVIRONMENT VARIABLES (override file values):
+#   QUALYS_USERNAME, QUALYS_PASSWORD, QUALYS_API_URL
+# ============================================================
+
+[credentials]
+username = 
+password = 
+
+[api]
+# Platform URLs - find yours at https://www.qualys.com/platform-identification/
+# US1: https://qualysapi.qualys.com
+# US2: https://qualysapi.qg2.apps.qualys.com
+# EU1: https://qualysapi.qualys.eu
+# EU2: https://qualysguard.qualys.eu
+base_url = https://qualysapi.qualys.com
+timeout = 30
+max_retries = 3
+
+[scanning]
+default_scanner = 
+default_option_profile = 
+
+[rate_limit]
+calls_per_minute = 100
+enabled = true
+
+[security]
+verify_ssl = true
+block_private_ips = true
+
+[database]
+# Local SQLite database for scan history and staging
+db_path = data/qualys_scans.db
+
+[logging]
+level = INFO
+log_payloads = false

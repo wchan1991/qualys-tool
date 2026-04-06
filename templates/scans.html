@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+
+{% block title %}Recent Scans - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🔍 Recent Scans</h1>
+    <p class="page-description">Scans that have run or are currently running</p>
+    <div class="header-actions">
+        <input type="text" id="search-input" class="input" placeholder="Search scans..." oninput="filterScans()">
+        <select id="status-filter" class="input" onchange="filterScans()">
+            <option value="">All Statuses</option>
+            <option value="running">Running</option>
+            <option value="paused">Paused</option>
+            <option value="queued">Queued</option>
+            <option value="finished">Finished</option>
+        </select>
+        <button id="refresh-btn" class="btn btn-primary" onclick="refreshScans()">
+            🔄 Refresh
+        </button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <table class="table" id="scans-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Title</th>
+                    <th>Target</th>
+                    <th>Type</th>
+                    <th>Tags</th>
+                    <th>Launched</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="scans-tbody">
+                <tr>
+                    <td colspan="7" class="text-muted text-center">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Stage Action Modal -->
+<div id="stage-modal" class="modal hidden">
+    <div class="modal-backdrop" onclick="closeModal()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modal-title">Stage Action</h3>
+            <button class="btn btn-icon" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <p id="modal-description"></p>
+            <label for="stage-reason">Reason (optional):</label>
+            <input type="text" id="stage-reason" class="input" placeholder="e.g., Maintenance window">
+            <input type="hidden" id="stage-action">
+            <input type="hidden" id="stage-ref">
+        </div>
+        <div class="modal-footer">
+            <button class="btn" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmStage()">Stage Change</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allScans = [];
+
+document.addEventListener('DOMContentLoaded', loadScans);
+
+async function loadScans() {
+    try {
+        const res = await fetch('/api/scans');
+        const json = await res.json();
+        
+        const tbody = document.getElementById('scans-tbody');
+        
+        if (!json.success || !json.data.length) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center">No scans found. Click Refresh to fetch from Qualys.</td></tr>';
+            return;
+        }
+        
+        allScans = json.data;
+        renderScans(allScans);
+        
+    } catch (e) {
+        console.error('Failed to load scans:', e);
+        document.getElementById('scans-tbody').innerHTML = 
+            '<tr><td colspan="7" class="text-danger text-center">Failed to load scans</td></tr>';
+    }
+}
+
+function renderScans(scans) {
+    const tbody = document.getElementById('scans-tbody');
+    
+    if (!scans.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center">No matching scans</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = scans.map(scan => {
+        const status = scan.status?.toLowerCase() || 'unknown';
+        const tags = (scan.tags || []).slice(0, 3).map(t => 
+            `<span class="tag">${escapeHtml(t)}</span>`
+        ).join('');
+        
+        let actions = '';
+        if (status === 'running') {
+            actions = `
+                <button class="btn btn-sm btn-warning" onclick="openStageModal('pause', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Pause</button>
+                <button class="btn btn-sm btn-danger" onclick="openStageModal('cancel', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Cancel</button>
+            `;
+        } else if (status === 'paused') {
+            actions = `
+                <button class="btn btn-sm btn-success" onclick="openStageModal('resume', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Resume</button>
+            `;
+        }
+        
+        return `
+            <tr data-status="${status}">
+                <td><span class="status-badge status-${status}">${scan.status}</span></td>
+                <td>
+                    <div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div>
+                    <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>
+                </td>
+                <td>${escapeHtml(scan.target || '')}</td>
+                <td>${escapeHtml(scan.type || '')}</td>
+                <td>${tags}</td>
+                <td>${formatDate(scan.launched)}</td>
+                <td class="actions-cell">${actions}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function filterScans() {
+    const search = document.getElementById('search-input').value.toLowerCase();
+    const statusFilter = document.getElementById('status-filter').value.toLowerCase();
+    
+    const filtered = allScans.filter(scan => {
+        const matchesSearch = !search || 
+            (scan.title || '').toLowerCase().includes(search) ||
+            (scan.ref || '').toLowerCase().includes(search) ||
+            (scan.target || '').toLowerCase().includes(search);
+        
+        const matchesStatus = !statusFilter || 
+            (scan.status || '').toLowerCase() === statusFilter;
+        
+        return matchesSearch && matchesStatus;
+    });
+    
+    renderScans(filtered);
+}
+
+function openStageModal(action, ref, title) {
+    document.getElementById('modal-title').textContent = `Stage ${action.charAt(0).toUpperCase() + action.slice(1)}`;
+    document.getElementById('modal-description').textContent = `${action.charAt(0).toUpperCase() + action.slice(1)} scan: ${title}`;
+    document.getElementById('stage-action').value = action;
+    document.getElementById('stage-ref').value = ref;
+    document.getElementById('stage-reason').value = '';
+    document.getElementById('stage-modal').classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('stage-modal').classList.add('hidden');
+}
+
+async function confirmStage() {
+    const action = document.getElementById('stage-action').value;
+    const ref = document.getElementById('stage-ref').value;
+    const reason = document.getElementById('stage-reason').value;
+    
+    try {
+        const res = await fetch('/api/stage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, scan_ref: ref, reason })
+        });
+        
+        const json = await res.json();
+        
+        if (json.success) {
+            showToast(`Staged: ${action} ${ref}`, 'success');
+            closeModal();
+            updateStagingBadge();
+        } else {
+            showToast(json.error || 'Failed to stage', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function refreshScans() {
+    const btn = document.getElementById('refresh-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Refreshing...';
+    
+    try {
+        const res = await fetch('/api/scans/refresh', { method: 'POST' });
+        const json = await res.json();
+        
+        if (json.success) {
+            showToast(`Refreshed ${json.data.refreshed} scans`, 'success');
+            loadScans();
+        } else {
+            showToast(json.error || 'Refresh failed', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄 Refresh';
+    }
+}
+</script>
+{% endblock %}

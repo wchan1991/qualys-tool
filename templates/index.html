@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <div class="header-actions">
+        <button id="refresh-btn" class="btn btn-primary" onclick="refreshAll()">
+            🔄 Refresh All from Qualys
+        </button>
+    </div>
+</div>
+
+{% if not configured %}
+<div class="alert alert-warning">
+    <strong>⚠️ Configuration Required</strong>
+    <p>Copy <code>config/.config.example</code> to <code>config/.config</code> and add your Qualys credentials.</p>
+</div>
+{% endif %}
+
+<!-- Running Scans Metrics -->
+<h3 class="section-title">🔍 Running Scans</h3>
+<div class="metrics-grid" id="metrics">
+    <div class="metric-card">
+        <div class="metric-label">Total Recent</div>
+        <div class="metric-value" id="metric-total">--</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Running</div>
+        <div class="metric-value metric-success" id="metric-running">--</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Paused</div>
+        <div class="metric-value metric-warning" id="metric-paused">--</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Queued</div>
+        <div class="metric-value metric-info" id="metric-queued">--</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Finished</div>
+        <div class="metric-value" id="metric-finished">--</div>
+    </div>
+</div>
+
+<!-- Scheduled Scans Metrics -->
+<h3 class="section-title">📅 Scheduled Scans</h3>
+<div class="metrics-grid" id="scheduled-metrics">
+    <div class="metric-card">
+        <div class="metric-label">Total Scheduled</div>
+        <div class="metric-value" id="metric-scheduled-total">--</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Active</div>
+        <div class="metric-value metric-success" id="metric-scheduled-active">--</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Inactive</div>
+        <div class="metric-value metric-warning" id="metric-scheduled-inactive">--</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Pending Changes</div>
+        <div class="metric-value metric-info" id="metric-pending">--</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Recent Scans</h2>
+        <a href="{{ url_for('scans_page') }}" class="btn btn-secondary btn-sm">View All →</a>
+    </div>
+    <div class="card-body">
+        <table class="table" id="recent-scans-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Title</th>
+                    <th>Target</th>
+                    <th>Launched</th>
+                </tr>
+            </thead>
+            <tbody id="recent-scans">
+                <tr>
+                    <td colspan="4" class="text-muted text-center">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Upcoming Scheduled Scans</h2>
+        <a href="{{ url_for('scheduled_page') }}" class="btn btn-secondary btn-sm">View All →</a>
+    </div>
+    <div class="card-body">
+        <table class="table" id="upcoming-scans-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Title</th>
+                    <th>Next Launch</th>
+                    <th>Schedule</th>
+                </tr>
+            </thead>
+            <tbody id="upcoming-scans">
+                <tr>
+                    <td colspan="4" class="text-muted text-center">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    loadDashboard();
+    loadRecentScans();
+    loadUpcomingScans();
+});
+
+async function loadDashboard() {
+    try {
+        const res = await fetch('/api/dashboard');
+        const json = await res.json();
+        
+        if (json.success) {
+            const d = json.data;
+            // Running scans
+            document.getElementById('metric-total').textContent = d.total_scans ?? '--';
+            document.getElementById('metric-running').textContent = d.running ?? '--';
+            document.getElementById('metric-paused').textContent = d.paused ?? '--';
+            document.getElementById('metric-queued').textContent = d.queued ?? '--';
+            document.getElementById('metric-finished').textContent = d.finished ?? '--';
+            // Scheduled scans
+            document.getElementById('metric-scheduled-total').textContent = d.total_scheduled ?? '--';
+            document.getElementById('metric-scheduled-active').textContent = d.active_scheduled ?? '--';
+            document.getElementById('metric-scheduled-inactive').textContent = d.inactive_scheduled ?? '--';
+            // Pending changes
+            document.getElementById('metric-pending').textContent = d.pending_changes ?? '--';
+        }
+    } catch (e) {
+        console.error('Failed to load dashboard:', e);
+    }
+}
+
+async function loadRecentScans() {
+    try {
+        const res = await fetch('/api/scans');
+        const json = await res.json();
+        
+        const tbody = document.getElementById('recent-scans');
+        
+        if (!json.success || !json.data.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No scans found. Click Refresh to fetch from Qualys.</td></tr>';
+            return;
+        }
+        
+        // Show first 5 scans
+        const scans = json.data.slice(0, 5);
+        tbody.innerHTML = scans.map(scan => `
+            <tr>
+                <td><span class="status-badge status-${scan.status?.toLowerCase()}">${scan.status}</span></td>
+                <td>
+                    <div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div>
+                    <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>
+                </td>
+                <td>${escapeHtml(scan.target || '')}</td>
+                <td>${formatDate(scan.launched)}</td>
+            </tr>
+        `).join('');
+        
+    } catch (e) {
+        console.error('Failed to load scans:', e);
+    }
+}
+
+async function loadUpcomingScans() {
+    try {
+        const res = await fetch('/api/scheduled');
+        const json = await res.json();
+        
+        const tbody = document.getElementById('upcoming-scans');
+        
+        if (!json.success || !json.data.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No scheduled scans found. Click Refresh to fetch from Qualys.</td></tr>';
+            return;
+        }
+        
+        // Show first 5 active scans sorted by next launch
+        const scans = json.data
+            .filter(s => s.active)
+            .slice(0, 5);
+        
+        if (scans.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No active scheduled scans.</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = scans.map(scan => `
+            <tr>
+                <td><span class="status-badge ${scan.active ? 'status-running' : 'status-paused'}">${scan.active ? 'Active' : 'Inactive'}</span></td>
+                <td>
+                    <div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div>
+                    <div class="scan-ref">ID: ${escapeHtml(scan.id || '')}</div>
+                </td>
+                <td>${formatDate(scan.next_launch)}</td>
+                <td>${escapeHtml(scan.schedule || '-')}</td>
+            </tr>
+        `).join('');
+        
+    } catch (e) {
+        console.error('Failed to load scheduled scans:', e);
+    }
+}
+
+async function refreshAll() {
+    const btn = document.getElementById('refresh-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Refreshing...';
+    
+    try {
+        const res = await fetch('/api/refresh-all', { method: 'POST' });
+        const json = await res.json();
+        
+        if (json.success) {
+            const d = json.data;
+            showToast(`Refreshed ${d.scans} scans, ${d.scheduled} scheduled`, 'success');
+            loadDashboard();
+            loadRecentScans();
+            loadUpcomingScans();
+        } else {
+            showToast(json.error || 'Refresh failed', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄 Refresh All from Qualys';
+    }
+}
+</script>
+{% endblock %}

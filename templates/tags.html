@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Tags - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🏷️ Tag Report</h1>
+    <div class="header-actions">
+        <input type="text" id="tag-search" class="input" placeholder="Search tags..." oninput="filterTags()">
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <table class="table" id="tags-table">
+            <thead>
+                <tr>
+                    <th>Tag</th>
+                    <th>Scan Count</th>
+                    <th>Example Scans</th>
+                </tr>
+            </thead>
+            <tbody id="tags-tbody">
+                <tr>
+                    <td colspan="3" class="text-muted text-center">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="alert alert-info">
+    <strong>💡 Tip:</strong> Tags are extracted from scans when you refresh. 
+    If you don't see tags, go to Dashboard and click "Refresh from Qualys".
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allTags = [];
+
+document.addEventListener('DOMContentLoaded', loadTags);
+
+async function loadTags() {
+    try {
+        const res = await fetch('/api/tags');
+        const json = await res.json();
+        
+        const tbody = document.getElementById('tags-tbody');
+        
+        if (!json.success || !json.data.length) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center">No tags found. Refresh scans to populate tags.</td></tr>';
+            return;
+        }
+        
+        allTags = json.data;
+        renderTags(allTags);
+        
+    } catch (e) {
+        console.error('Failed to load tags:', e);
+    }
+}
+
+function renderTags(tags) {
+    const tbody = document.getElementById('tags-tbody');
+    
+    if (!tags.length) {
+        tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center">No matching tags</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = tags.map(tag => {
+        const examples = (tag.example_scans || []).slice(0, 3).map(ref => 
+            `<span class="scan-ref">${escapeHtml(ref)}</span>`
+        ).join(', ');
+        
+        return `
+            <tr>
+                <td><span class="tag tag-lg">${escapeHtml(tag.tag)}</span></td>
+                <td><span class="count-badge">${tag.scan_count}</span></td>
+                <td>${examples || '—'}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function filterTags() {
+    const search = document.getElementById('tag-search').value.toLowerCase();
+    
+    const filtered = allTags.filter(tag => 
+        tag.tag.toLowerCase().includes(search)
+    );
+    
+    renderTags(filtered);
+}
+</script>
+{% endblock %}
