@@ -293,9 +293,14 @@ def api_scheduled_debug():
     """
     Debug endpoint - fetch raw scheduled scans from Qualys API.
     
-    Returns the raw XML response (truncated) and parsed count.
+    Returns the raw XML response and parsed results.
+    Also saves the full raw XML to logs/scheduled_scans_debug.xml for inspection.
+    
     Use this to troubleshoot parsing issues.
     """
+    import os
+    from datetime import datetime
+    
     manager = get_manager()
     
     try:
@@ -308,19 +313,64 @@ def api_scheduled_debug():
         
         raw_xml = response.text
         
-        # Try to parse
+        # Save full XML to file for debugging
+        debug_file = os.path.join("logs", f"scheduled_scans_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml")
+        os.makedirs("logs", exist_ok=True)
+        with open(debug_file, "w", encoding="utf-8") as f:
+            f.write(raw_xml)
+        
+        # Parse the XML to show structure
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(raw_xml)
+        
+        # Build structure info
+        structure = []
+        def walk(elem, depth=0):
+            if depth > 4:  # Limit depth
+                return
+            children = list(elem)
+            child_tags = [c.tag for c in children[:10]]  # First 10 children
+            text_preview = (elem.text or "")[:50].strip()
+            structure.append({
+                "depth": depth,
+                "tag": elem.tag,
+                "children_count": len(children),
+                "child_tags": child_tags,
+                "text_preview": text_preview if text_preview else None,
+                "attributes": dict(elem.attrib) if elem.attrib else None
+            })
+            for child in children[:5]:  # Only recurse first 5
+                walk(child, depth + 1)
+        
+        walk(root)
+        
+        # Try to parse with our parser
         scheduled = manager.client._parse_scheduled(raw_xml)
+        
+        # Find SCAN elements with different XPaths for debugging
+        xpath_results = {
+            ".//SCAN": len(root.findall(".//SCAN")),
+            ".//SCHEDULE_SCAN_LIST/SCAN": len(root.findall(".//SCHEDULE_SCAN_LIST/SCAN")),
+            ".//RESPONSE/SCHEDULE_SCAN_LIST/SCAN": len(root.findall(".//RESPONSE/SCHEDULE_SCAN_LIST/SCAN")),
+            ".//SCHEDULE_SCAN_LIST": len(root.findall(".//SCHEDULE_SCAN_LIST")),
+        }
         
         return {
             "raw_xml_length": len(raw_xml),
-            "raw_xml_preview": raw_xml[:2000],  # First 2000 chars
+            "raw_xml_preview": raw_xml[:3000],  # First 3000 chars
+            "debug_file_saved": debug_file,
+            "root_element": root.tag,
+            "xml_structure": structure[:30],  # First 30 elements
+            "xpath_results": xpath_results,
             "parsed_count": len(scheduled),
             "parsed_scans": scheduled[:5] if scheduled else [],  # First 5 scans
         }
     except Exception as e:
+        import traceback
         return {
             "error": str(e),
             "error_type": type(e).__name__,
+            "traceback": traceback.format_exc(),
         }
 
 

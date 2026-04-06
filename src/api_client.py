@@ -399,145 +399,194 @@ class QualysClient:
         """
         Parse scheduled scans from XML response.
         
-        Expected XML structure (from Qualys API):
-        <SCHEDULE_SCAN_LIST_OUTPUT>
-          <RESPONSE>
-            <SCHEDULE_SCAN_LIST>
-              <SCAN>
-                <ID>160642</ID>
-                <ACTIVE>1</ACTIVE>
-                <TITLE>My Daily Scan</TITLE>
-                <USER_LOGIN>qualys_user</USER_LOGIN>
-                <TARGET>10.10.10.10-10.10.10.20</TARGET>
-                <ISCANNER_NAME>External Scanner</ISCANNER_NAME>
-                <OPTION_PROFILE>
-                  <TITLE>Initial Options</TITLE>
-                </OPTION_PROFILE>
-                <SCHEDULE>
-                  <DAILY frequency_days="1" />
-                  <NEXTLAUNCH_UTC>2017-12-02T00:30:00</NEXTLAUNCH_UTC>
-                </SCHEDULE>
-              </SCAN>
-            </SCHEDULE_SCAN_LIST>
-          </RESPONSE>
-        </SCHEDULE_SCAN_LIST_OUTPUT>
+        Handles both API structures:
+        1. V2 API: /api/2.0/fo/schedule/scan/?action=list
+           Returns: SCHEDULE_SCAN_LIST_OUTPUT > RESPONSE > SCHEDULE_SCAN_LIST > SCAN
+        
+        2. Legacy check: Some responses may have different structures
         """
         scheduled = []
+        
+        # Log full XML for debugging (truncated for large responses)
+        xml_preview = xml_text[:3000] if len(xml_text) > 3000 else xml_text
+        logger.info(f"Parsing scheduled scan response ({len(xml_text)} bytes)")
+        logger.debug(f"XML response:\n{xml_preview}")
+        
         try:
-            # Log raw XML for debugging (first 1000 chars)
-            logger.debug(f"Scheduled scan XML response (truncated): {xml_text[:1000]}")
-            
             root = ET.fromstring(xml_text)
+            logger.info(f"XML root element: <{root.tag}>")
             
-            # Check for error response
-            error_text = self._xml_text(root, ".//TEXT")
-            if error_text and "error" in error_text.lower():
-                logger.error(f"API returned error: {error_text}")
+            # Log immediate children of root
+            for child in root:
+                logger.debug(f"  Root child: <{child.tag}>")
+            
+            # Check for error response first
+            error_elem = root.find(".//SIMPLE_RETURN")
+            if error_elem is not None:
+                error_text = self._xml_text(error_elem, "RESPONSE/TEXT")
+                if error_text:
+                    logger.error(f"API returned error response: {error_text}")
+                    return []
+            
+            # Also check for error in CODE element
+            code_elem = root.find(".//CODE")
+            if code_elem is not None and code_elem.text:
+                logger.error(f"API returned error code: {code_elem.text}")
+                text_elem = root.find(".//TEXT")
+                if text_elem is not None:
+                    logger.error(f"Error message: {text_elem.text}")
                 return []
             
-            # Try multiple XPath patterns to find SCAN elements
+            # Try to find SCAN elements using multiple strategies
+            scan_elements = []
+            
+            # Strategy 1: Standard V2 API path
             scan_elements = root.findall(".//SCHEDULE_SCAN_LIST/SCAN")
+            if scan_elements:
+                logger.info(f"Found {len(scan_elements)} scans via SCHEDULE_SCAN_LIST/SCAN")
             
+            # Strategy 2: Direct under RESPONSE
             if not scan_elements:
-                # Fallback: try finding SCAN directly under RESPONSE
                 scan_elements = root.findall(".//RESPONSE/SCHEDULE_SCAN_LIST/SCAN")
+                if scan_elements:
+                    logger.info(f"Found {len(scan_elements)} scans via RESPONSE/SCHEDULE_SCAN_LIST/SCAN")
             
+            # Strategy 3: Any SCAN element with scheduling attributes
             if not scan_elements:
-                # Second fallback: just find any SCAN element
-                scan_elements = root.findall(".//SCAN")
-                # Filter out non-scheduled scans (check for ID element which scheduled scans have)
-                scan_elements = [e for e in scan_elements if e.find("ID") is not None and e.find("SCHEDULE") is not None]
+                all_scans = root.findall(".//SCAN")
+                scan_elements = [e for e in all_scans if e.find("ID") is not None]
+                if scan_elements:
+                    logger.info(f"Found {len(scan_elements)} scans via generic .//SCAN search")
             
+            # If still nothing, log the full structure for debugging
             if not scan_elements:
-                # Log the structure to help debug
-                logger.warning(f"No scheduled scans found in response. Root tag: {root.tag}")
-                for child in root:
-                    logger.warning(f"  Child element: {child.tag}")
-                    for grandchild in child:
-                        logger.warning(f"    Grandchild: {grandchild.tag}")
+                logger.warning("No scheduled scan elements found. Logging XML structure:")
+                self._log_xml_structure(root, indent=0)
+                
+                # Check if the response indicates no data
+                datetime_elem = root.find(".//DATETIME")
+                if datetime_elem is not None:
+                    logger.info(f"Response timestamp: {datetime_elem.text}")
+                    logger.warning("API responded successfully but returned no scheduled scans. "
+                                   "This may indicate no scheduled scans exist or insufficient permissions.")
                 return []
             
-            logger.info(f"Found {len(scan_elements)} SCAN elements in response")
-            
+            # Parse each scan element
             for elem in scan_elements:
-                # Extract target - try multiple paths
-                target = self._xml_text(elem, "TARGET")
-                if not target:
-                    # Try asset group
-                    target = self._xml_text(elem, "ASSET_GROUP_TITLE_LIST/ASSET_GROUP_TITLE")
-                if not target:
-                    # Try asset tags
-                    tag_include = self._xml_text(elem, "ASSET_TAGS/TAG_SET_INCLUDE")
-                    if tag_include:
-                        target = f"Tags: {tag_include}"
-                
-                # Extract schedule info - NEXTLAUNCH_UTC is inside SCHEDULE element
-                schedule_elem = elem.find("SCHEDULE")
-                schedule_text = ""
-                next_launch = ""
-                
-                if schedule_elem is not None:
-                    # Get next launch time
-                    next_launch = self._xml_text(elem, "SCHEDULE/NEXTLAUNCH_UTC")
-                    
-                    # Build human-readable schedule description
-                    daily = schedule_elem.find("DAILY")
-                    weekly = schedule_elem.find("WEEKLY")
-                    monthly = schedule_elem.find("MONTHLY")
-                    
-                    if daily is not None:
-                        freq = daily.get("frequency_days", "1")
-                        schedule_text = f"Daily (every {freq} day{'s' if freq != '1' else ''})"
-                    elif weekly is not None:
-                        freq = weekly.get("frequency_weeks", "1")
-                        weekdays = weekly.get("weekdays", "")
-                        schedule_text = f"Weekly ({weekdays})"
-                    elif monthly is not None:
-                        schedule_text = "Monthly"
-                    else:
-                        # Fallback - just indicate it's scheduled
-                        start_hour = self._xml_text(elem, "SCHEDULE/START_HOUR")
-                        start_min = self._xml_text(elem, "SCHEDULE/START_MINUTE")
-                        if start_hour and start_min:
-                            schedule_text = f"At {start_hour}:{start_min.zfill(2)}"
-                
-                # Get last launch from LASTLAUNCH_UTC if available
-                last_launch = self._xml_text(elem, "LASTLAUNCH_UTC")
-                if not last_launch:
-                    last_launch = self._xml_text(elem, "SCHEDULE/LASTLAUNCH_UTC")
-                
-                scan_id = self._xml_text(elem, "ID")
-                active_val = self._xml_text(elem, "ACTIVE")
-                
-                # ACTIVE can be "1", "0", or empty (empty means inactive)
-                is_active = active_val == "1"
-                
-                scheduled.append({
-                    "id": scan_id,
-                    "title": self._xml_text(elem, "TITLE"),
-                    "active": is_active,
-                    "target": target or "N/A",
-                    "option_profile": self._xml_text(elem, "OPTION_PROFILE/TITLE"),
-                    "scanner": self._xml_text(elem, "ISCANNER_NAME"),
-                    "schedule": schedule_text or "Scheduled",
-                    "next_launch": next_launch,
-                    "last_launch": last_launch,
-                    "owner": self._xml_text(elem, "USER_LOGIN"),
-                    "type": "scheduled",
-                })
-                
-                logger.debug(f"Parsed scheduled scan: ID={scan_id}, Title={self._xml_text(elem, 'TITLE')}, Active={is_active}")
+                try:
+                    scan_data = self._parse_single_scheduled_scan(elem)
+                    if scan_data:
+                        scheduled.append(scan_data)
+                        logger.debug(f"Parsed: ID={scan_data['id']}, Title={scan_data['title']}, Active={scan_data['active']}")
+                except Exception as e:
+                    logger.error(f"Error parsing individual scan element: {e}")
+                    continue
             
-            logger.info(f"Successfully parsed {len(scheduled)} scheduled scans from API response")
+            logger.info(f"Successfully parsed {len(scheduled)} scheduled scans")
             
         except ET.ParseError as e:
-            logger.error(f"Failed to parse scheduled XML: {e}")
-            logger.error(f"XML content (truncated): {xml_text[:2000]}")
+            logger.error(f"XML parsing failed: {e}")
+            logger.error(f"Raw XML (first 2000 chars): {xml_text[:2000]}")
         except Exception as e:
-            logger.error(f"Unexpected error parsing scheduled scans: {e}")
-            logger.error(f"XML content (truncated): {xml_text[:2000]}")
+            logger.error(f"Unexpected error in _parse_scheduled: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         return scheduled
+    
+    def _parse_single_scheduled_scan(self, elem) -> Dict[str, Any]:
+        """Parse a single SCAN element into a dictionary."""
+        # Extract target - try multiple paths
+        target = self._xml_text(elem, "TARGET")
+        if not target:
+            target = self._xml_text(elem, "ASSET_GROUP_TITLE_LIST/ASSET_GROUP_TITLE")
+        if not target:
+            tag_include = self._xml_text(elem, "ASSET_TAGS/TAG_SET_INCLUDE")
+            if tag_include:
+                target = f"Tags: {tag_include}"
+        if not target:
+            # Try USER_ENTERED_IPS
+            ip_start = self._xml_text(elem, "USER_ENTERED_IPS/RANGE/START")
+            ip_end = self._xml_text(elem, "USER_ENTERED_IPS/RANGE/END")
+            if ip_start:
+                target = f"{ip_start}-{ip_end}" if ip_end and ip_end != ip_start else ip_start
+        
+        # Extract schedule info
+        schedule_elem = elem.find("SCHEDULE")
+        schedule_text = ""
+        next_launch = ""
+        
+        if schedule_elem is not None:
+            # Get next launch time (try multiple paths)
+            next_launch = self._xml_text(elem, "SCHEDULE/NEXTLAUNCH_UTC")
+            if not next_launch:
+                next_launch = self._xml_text(elem, "NEXTLAUNCH_UTC")
+            
+            # Build human-readable schedule description
+            daily = schedule_elem.find("DAILY")
+            weekly = schedule_elem.find("WEEKLY")
+            monthly = schedule_elem.find("MONTHLY")
+            
+            if daily is not None:
+                freq = daily.get("frequency_days", "1")
+                schedule_text = f"Daily (every {freq} day{'s' if freq != '1' else ''})"
+            elif weekly is not None:
+                freq = weekly.get("frequency_weeks", "1")
+                weekdays = weekly.get("weekdays", "")
+                schedule_text = f"Weekly ({weekdays})" if weekdays else f"Weekly (every {freq} week{'s' if freq != '1' else ''})"
+            elif monthly is not None:
+                schedule_text = "Monthly"
+            else:
+                start_hour = self._xml_text(elem, "SCHEDULE/START_HOUR")
+                start_min = self._xml_text(elem, "SCHEDULE/START_MINUTE")
+                if start_hour and start_min:
+                    schedule_text = f"At {start_hour}:{start_min.zfill(2)}"
+        else:
+            # Try to get next launch from element directly (some API versions)
+            next_launch = self._xml_text(elem, "NEXTLAUNCH_UTC")
+        
+        # Get last launch
+        last_launch = self._xml_text(elem, "LASTLAUNCH_UTC")
+        if not last_launch:
+            last_launch = self._xml_text(elem, "SCHEDULE/LASTLAUNCH_UTC")
+        
+        # Get ID and active status
+        scan_id = self._xml_text(elem, "ID")
+        active_val = self._xml_text(elem, "ACTIVE")
+        
+        # ACTIVE can be "1", "0", "2", "3", or empty
+        # 1 = active, 0 = deactivated, 2 = active not paused, 3 = paused
+        is_active = active_val in ("1", "2")
+        
+        return {
+            "id": scan_id,
+            "title": self._xml_text(elem, "TITLE"),
+            "active": is_active,
+            "target": target or "N/A",
+            "option_profile": self._xml_text(elem, "OPTION_PROFILE/TITLE"),
+            "scanner": self._xml_text(elem, "ISCANNER_NAME"),
+            "schedule": schedule_text or "Scheduled",
+            "next_launch": next_launch,
+            "last_launch": last_launch,
+            "owner": self._xml_text(elem, "USER_LOGIN"),
+            "type": "scheduled",
+        }
+    
+    def _log_xml_structure(self, elem, indent=0) -> None:
+        """Recursively log XML structure for debugging."""
+        prefix = "  " * indent
+        attrs = " ".join(f'{k}="{v}"' for k, v in elem.attrib.items())
+        text = (elem.text or "").strip()[:50]
+        
+        if attrs:
+            logger.warning(f"{prefix}<{elem.tag} {attrs}>{' ...' + text if text else ''}")
+        else:
+            logger.warning(f"{prefix}<{elem.tag}>{' ...' + text if text else ''}")
+        
+        # Only go 3 levels deep to avoid spam
+        if indent < 3:
+            for child in elem:
+                self._log_xml_structure(child, indent + 1)
     
     # SCHEDULED SCAN OPERATIONS
     
