@@ -5,9 +5,16 @@ High-level operations for scan management with staging support.
 Supports both running scans and scheduled scans.
 """
 
+import ipaddress
+import json
 import logging
+import time
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+from dateutil import rrule as rrulemod
+from dateutil.parser import parse as parse_dt
+from dateutil.rrule import rrule, DAILY, WEEKLY, MONTHLY
 
 from .config_loader import QualysConfig, load_config
 from .api_client import QualysClient, QualysError
@@ -214,7 +221,53 @@ class ScanManager:
             description=reason or f"Delete scheduled scan: {title}",
             scan_type="scheduled"
         )
-    
+
+    def stage_create_scheduled(self, payload: Dict[str, Any], reason: str = "") -> int:
+        """Stage creation of a new scheduled scan."""
+        title = payload.get("title", "New scheduled scan")
+        return self.db.stage_change(
+            scan_ref="__new__",
+            change_type=ChangeType.CREATE,
+            old_value="",
+            new_value="Scheduled",
+            description=reason or f"Create scheduled scan: {title}",
+            scan_type="scheduled",
+            payload=payload,
+        )
+
+    def stage_modify_scheduled(
+        self,
+        scan_id: str,
+        current: Dict[str, Any],
+        changes: Dict[str, Any],
+        reason: str = "",
+    ) -> int:
+        """Stage a basic edit of a scheduled scan (title, target, option profile)."""
+        title = changes.get("title") or current.get("title", scan_id)
+        payload = {"scan_id": scan_id, "current": current, "changes": changes}
+        return self.db.stage_change(
+            scan_ref=scan_id,
+            change_type=ChangeType.MODIFY,
+            old_value=json.dumps(current),
+            new_value=json.dumps(changes),
+            description=reason or f"Edit scheduled scan: {title}",
+            scan_type="scheduled",
+            payload=payload,
+        )
+
+    def stage_launch_scan(self, payload: Dict[str, Any], reason: str = "") -> int:
+        """Stage an on-demand scan launch."""
+        title = payload.get("title", "On-demand scan")
+        return self.db.stage_change(
+            scan_ref="__launch__",
+            change_type=ChangeType.LAUNCH,
+            old_value="",
+            new_value="Launched",
+            description=reason or f"Launch scan: {title}",
+            scan_type="scan",
+            payload=payload,
+        )
+
     # ========================================================
     # STAGING - COMMON
     # ========================================================
@@ -230,6 +283,7 @@ class ScanManager:
                 "action": c.change_type,
                 "description": c.description,
                 "staged_at": c.staged_at,
+                "payload": c.payload or None,
             }
             for c in changes
         ]
@@ -282,6 +336,20 @@ class ScanManager:
                     success = self.client.deactivate_scheduled_scan(change.scan_ref)
                 elif change.change_type == ChangeType.DELETE.value:
                     success = self.client.delete_scheduled_scan(change.scan_ref)
+
+                # Create / modify / launch operations (payload-based)
+                elif change.change_type == ChangeType.LAUNCH.value:
+                    payload = json.loads(change.payload) if change.payload else {}
+                    scan_ref = self.client.launch_scan(payload)
+                    success = bool(scan_ref)
+                elif change.change_type == ChangeType.CREATE.value and change.scan_type == "scheduled":
+                    payload = json.loads(change.payload) if change.payload else {}
+                    new_id = self.client.create_scheduled_scan(payload)
+                    success = bool(new_id)
+                elif change.change_type == ChangeType.MODIFY.value and change.scan_type == "scheduled":
+                    payload = json.loads(change.payload) if change.payload else {}
+                    changes = payload.get("changes", {})
+                    success = self.client.update_scheduled_scan(change.scan_ref, changes)
                 
                 if success:
                     self.db.mark_change_applied(change.id)
@@ -322,6 +390,265 @@ class ScanManager:
         
         return results
     
+    # ========================================================
+    # DETAIL PAGES
+    # ========================================================
+
+    def get_scan_detail(self, scan_ref: str) -> Dict[str, Any]:
+        """Get full detail for a running/completed scan."""
+        return self.client.get_scan_detail(scan_ref)
+
+    def get_scheduled_scan_detail(self, scan_id: str) -> Dict[str, Any]:
+        """Get full detail for a scheduled scan."""
+        scans = self.client.get_scheduled_scan(scan_id)
+        if scans:
+            return scans[0]
+        return {}
+
+    # ========================================================
+    # REVERSE TARGET LOOKUP
+    # ========================================================
+
+    def find_scans_using_target(self, target_type: str, target_value: str) -> Dict[str, Any]:
+        """
+        Find all scans (scheduled + recent) that use a given target.
+
+        Args:
+            target_type: One of 'ip', 'range', 'asset_group', 'tag', 'ip_list'
+            target_value: The value to search for
+
+        Returns:
+            {'scheduled': [...], 'recent': [...]}
+        """
+        return self.db.find_scans_by_target(target_type, target_value)
+
+    # ========================================================
+    # TARGET SOURCES (for form dropdowns)
+    # ========================================================
+
+    _target_sources_cache: Optional[Dict[str, Any]] = None
+    _target_sources_fetched_at: Optional[float] = None
+    _TARGET_SOURCES_TTL = 300  # 5 minutes
+
+    def get_target_sources(self) -> Dict[str, Any]:
+        """
+        Return asset groups, tags, scanners, and option profiles for form dropdowns.
+        Cached for 5 minutes.
+        """
+        now = time.monotonic()
+        if (
+            self._target_sources_cache is not None
+            and self._target_sources_fetched_at is not None
+            and now - self._target_sources_fetched_at < self._TARGET_SOURCES_TTL
+        ):
+            return self._target_sources_cache
+
+        result: Dict[str, Any] = {
+            "asset_groups": [],
+            "tags": [],
+            "scanners": [],
+            "option_profiles": [],
+        }
+
+        try:
+            result["asset_groups"] = self.client.list_asset_groups()
+        except Exception as e:
+            logger.warning(f"Could not fetch asset groups: {e}")
+
+        try:
+            result["tags"] = self.client.list_tags()
+        except Exception as e:
+            logger.warning(f"Could not fetch tags: {e}")
+
+        try:
+            result["scanners"] = self.client.list_scanners()
+        except Exception as e:
+            logger.warning(f"Could not fetch scanners: {e}")
+
+        try:
+            result["option_profiles"] = self.client.list_option_profiles()
+        except Exception as e:
+            logger.warning(f"Could not fetch option profiles: {e}")
+
+        ScanManager._target_sources_cache = result
+        ScanManager._target_sources_fetched_at = now
+        return result
+
+    # ========================================================
+    # CALENDAR
+    # ========================================================
+
+    def get_calendar_events(
+        self,
+        start_iso: str,
+        end_iso: str,
+        event_type: str = "scheduled",
+    ) -> List[Dict[str, Any]]:
+        """
+        Return calendar events in a FullCalendar-compatible format.
+
+        Args:
+            start_iso: ISO8601 start of window
+            end_iso:   ISO8601 end of window
+            event_type: 'scheduled' or 'ondemand'
+
+        Returns:
+            List of {id, title, start, end, url, color, extendedProps}
+        """
+        try:
+            start_dt = parse_dt(start_iso)
+            end_dt = parse_dt(end_iso)
+        except Exception:
+            return []
+
+        if event_type == "ondemand":
+            return self._ondemand_events(start_dt, end_dt)
+        return self._scheduled_events(start_dt, end_dt)
+
+    def _ondemand_events(self, start_dt: datetime, end_dt: datetime) -> List[Dict[str, Any]]:
+        """Historical on-demand scan events from the local DB."""
+        scans = self.get_scans()
+        events = []
+        for scan in scans:
+            launched_str = scan.get("launched")
+            if not launched_str:
+                continue
+            try:
+                launched = parse_dt(str(launched_str))
+            except Exception:
+                continue
+            if not (start_dt.replace(tzinfo=None) <= launched.replace(tzinfo=None) <= end_dt.replace(tzinfo=None)):
+                continue
+            events.append({
+                "id": scan["ref"],
+                "title": scan.get("title") or scan["ref"],
+                "start": launched.isoformat(),
+                "url": f"/scans/{scan['ref']}",
+                "color": self._status_color(scan.get("status", "")),
+                "extendedProps": {
+                    "status": scan.get("status"),
+                    "target": scan.get("target"),
+                    "ref": scan["ref"],
+                },
+            })
+        return events
+
+    def _scheduled_events(self, start_dt: datetime, end_dt: datetime) -> List[Dict[str, Any]]:
+        """Project scheduled scan recurrences into concrete events."""
+        scheduled = self.get_scheduled_scans()
+        events = []
+
+        for scan in scheduled:
+            if not scan.get("active"):
+                continue
+            occurrences = self._expand_schedule(scan, start_dt, end_dt)
+            for occ in occurrences:
+                events.append({
+                    "id": f"{scan.get('scan_id', '')}_{occ.isoformat()}",
+                    "title": scan.get("title", "Scheduled Scan"),
+                    "start": occ.isoformat(),
+                    "url": f"/scheduled/{scan.get('scan_id', '')}",
+                    "color": "#3788d8",
+                    "extendedProps": {
+                        "scan_id": scan.get("scan_id"),
+                        "target": scan.get("target"),
+                        "active": scan.get("active"),
+                    },
+                })
+
+        return events
+
+    def _expand_schedule(
+        self, scan: Dict[str, Any], start_dt: datetime, end_dt: datetime
+    ) -> List[datetime]:
+        """
+        Expand a scheduled scan's recurrence rule into datetimes within [start_dt, end_dt].
+        Works with the schedule fields stored in the local DB row.
+        """
+        raw = scan.get("raw_data")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = {}
+        if not raw:
+            raw = {}
+
+        # Parse start datetime from scan
+        start_str = (
+            raw.get("start_datetime")
+            or raw.get("START_DATETIME")
+            or scan.get("next_launch")
+            or scan.get("start_date")
+        )
+        try:
+            scan_start = parse_dt(str(start_str)) if start_str else start_dt
+        except Exception:
+            scan_start = start_dt
+
+        # Make naive for comparison
+        scan_start = scan_start.replace(tzinfo=None)
+        win_start = start_dt.replace(tzinfo=None)
+        win_end = end_dt.replace(tzinfo=None)
+
+        occurrence = (raw.get("occurrence") or raw.get("OCCURRENCE") or "").lower()
+        freq_days = raw.get("frequency_days") or raw.get("FREQUENCY_DAYS")
+        freq_weeks = raw.get("frequency_weeks") or raw.get("FREQUENCY_WEEKS")
+
+        try:
+            if occurrence == "daily" or (freq_days and int(freq_days) > 0):
+                interval = int(freq_days or 1)
+                dates = list(rrule(DAILY, dtstart=scan_start, until=win_end, interval=interval))
+            elif occurrence == "weekly" or (freq_weeks and int(freq_weeks) > 0):
+                interval = int(freq_weeks or 1)
+                weekdays_str = raw.get("weekdays") or raw.get("WEEKDAYS") or ""
+                byweekday = self._parse_weekdays(weekdays_str)
+                dates = list(rrule(WEEKLY, dtstart=scan_start, until=win_end, interval=interval, byweekday=byweekday or None))
+            elif occurrence == "monthly":
+                day_of_month = raw.get("day_of_month") or raw.get("DAY_OF_MONTH")
+                if day_of_month:
+                    dates = list(rrule(MONTHLY, dtstart=scan_start, until=win_end, bymonthday=int(day_of_month)))
+                else:
+                    dates = list(rrule(MONTHLY, dtstart=scan_start, until=win_end))
+            else:
+                # One-time or unknown — use scan_start if in window
+                dates = [scan_start] if win_start <= scan_start <= win_end else []
+        except Exception as e:
+            logger.debug(f"Could not expand schedule for scan {scan.get('scan_id')}: {e}")
+            dates = []
+
+        return [d for d in dates if win_start <= d <= win_end]
+
+    @staticmethod
+    def _parse_weekdays(weekdays_str: str) -> list:
+        """Convert 'sunday,monday,...' string to dateutil weekday constants."""
+        _MAP = {
+            "sunday": rrulemod.SU,
+            "monday": rrulemod.MO,
+            "tuesday": rrulemod.TU,
+            "wednesday": rrulemod.WE,
+            "thursday": rrulemod.TH,
+            "friday": rrulemod.FR,
+            "saturday": rrulemod.SA,
+        }
+        result = []
+        for part in weekdays_str.lower().replace(";", ",").split(","):
+            part = part.strip()
+            if part in _MAP:
+                result.append(_MAP[part])
+        return result
+
+    @staticmethod
+    def _status_color(status: str) -> str:
+        return {
+            "Running": "#28a745",
+            "Paused": "#ffc107",
+            "Queued": "#17a2b8",
+            "Finished": "#6c757d",
+            "Error": "#dc3545",
+            "Canceled": "#6c757d",
+        }.get(status, "#6c757d")
+
     # ========================================================
     # DIFF / COMPARISON
     # ========================================================

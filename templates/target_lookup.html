@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Target Lookup - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🔎 Target Lookup</h1>
+    <p class="page-description">Find all scans that use a given IP, asset group, or tag</p>
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+    <div class="card-body">
+        <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">
+            <div>
+                <label for="lookup-type"><strong>Target Type</strong></label><br>
+                <select id="lookup-type" class="input" style="min-width:140px" onchange="onTypeChange()">
+                    <option value="ip">IP / CIDR</option>
+                    <option value="asset_group">Asset Group</option>
+                    <option value="tag">Tag</option>
+                </select>
+            </div>
+            <div style="flex:1;min-width:220px">
+                <label for="lookup-value"><strong>Value</strong></label><br>
+                <input type="text" id="lookup-value" class="input" style="width:100%"
+                    placeholder="e.g. 10.0.0.1 or 192.168.0.0/24"
+                    onkeydown="if(event.key==='Enter') doLookup()">
+            </div>
+            <div>
+                <button class="btn btn-primary" onclick="doLookup()">🔎 Search</button>
+            </div>
+        </div>
+        <div id="lookup-hint" class="text-muted" style="font-size:0.8rem;margin-top:0.4rem">
+            For IP/CIDR: enter a single address or range. Scans whose target overlaps will be returned.
+        </div>
+    </div>
+</div>
+
+<div id="results-container" class="hidden">
+    <h3>Scheduled Scans <span id="sched-count" class="badge">0</span></h3>
+    <div class="card" style="margin-bottom:1rem">
+        <div class="card-body">
+            <table class="table">
+                <thead><tr><th>Title</th><th>Target</th><th>Status</th><th></th></tr></thead>
+                <tbody id="sched-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <h3>Recent Scans <span id="recent-count" class="badge">0</span></h3>
+    <div class="card">
+        <div class="card-body">
+            <table class="table">
+                <thead><tr><th>Title</th><th>Target</th><th>Status</th><th>Launched</th><th></th></tr></thead>
+                <tbody id="recent-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div id="empty-result" class="hidden" style="text-align:center;padding:2rem;color:var(--text-muted,#666)">
+    No scans found for that target.
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function onTypeChange() {
+    const type = document.getElementById('lookup-type').value;
+    const hints = {
+        ip: 'For IP/CIDR: enter a single address or range. Scans whose target overlaps will be returned.',
+        asset_group: 'Enter the exact asset group name.',
+        tag: 'Enter the exact tag name.',
+    };
+    document.getElementById('lookup-hint').textContent = hints[type] || '';
+    document.getElementById('lookup-value').placeholder =
+        type === 'ip' ? 'e.g. 10.0.0.1 or 192.168.0.0/24' :
+        type === 'asset_group' ? 'e.g. Server Farm' : 'e.g. Production';
+}
+
+async function doLookup() {
+    const type = document.getElementById('lookup-type').value;
+    const value = document.getElementById('lookup-value').value.trim();
+    if (!value) { showToast('Enter a value to search', 'error'); return; }
+
+    document.getElementById('results-container').classList.add('hidden');
+    document.getElementById('empty-result').classList.add('hidden');
+
+    try {
+        const res = await fetch(`/api/lookup?type=${encodeURIComponent(type)}&value=${encodeURIComponent(value)}`);
+        const json = await res.json();
+        if (!json.success) { showToast(json.error || 'Lookup failed', 'error'); return; }
+
+        const { scheduled = [], recent = [] } = json.data;
+
+        if (!scheduled.length && !recent.length) {
+            document.getElementById('empty-result').classList.remove('hidden');
+            return;
+        }
+
+        document.getElementById('sched-count').textContent = scheduled.length;
+        document.getElementById('recent-count').textContent = recent.length;
+
+        document.getElementById('sched-tbody').innerHTML = scheduled.length
+            ? scheduled.map(s => `
+                <tr>
+                    <td><a href="/scheduled/${encodeURIComponent(s.scan_id || s.id)}">${esc(s.title || '—')}</a></td>
+                    <td>${esc(s.target || '—')}</td>
+                    <td><span class="status-badge ${s.active ? 'status-active' : 'status-inactive'}">${s.active ? 'Active' : 'Inactive'}</span></td>
+                    <td><a href="/scheduled/${encodeURIComponent(s.scan_id || s.id)}" class="btn btn-sm">Details</a></td>
+                </tr>`).join('')
+            : '<tr><td colspan="4" class="text-muted text-center">None</td></tr>';
+
+        document.getElementById('recent-tbody').innerHTML = recent.length
+            ? recent.map(s => `
+                <tr>
+                    <td><a href="/scans/${encodeURIComponent(s.ref)}">${esc(s.title || '—')}</a></td>
+                    <td>${esc(s.target || '—')}</td>
+                    <td><span class="status-badge status-${(s.status||'').toLowerCase()}">${esc(s.status || '—')}</span></td>
+                    <td>${formatDate(s.launched)}</td>
+                    <td><a href="/scans/${encodeURIComponent(s.ref)}" class="btn btn-sm">Details</a></td>
+                </tr>`).join('')
+            : '<tr><td colspan="5" class="text-muted text-center">None</td></tr>';
+
+        document.getElementById('results-container').classList.remove('hidden');
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function formatDate(d) {
+    if (!d) return '—';
+    try { return new Date(d).toLocaleString(); } catch { return d; }
+}
+
+function esc(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

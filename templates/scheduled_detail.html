@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Scheduled Scan Detail - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📅 Scheduled Scan Detail</h1>
+    <div class="header-actions">
+        <a href="/scheduled" class="btn btn-secondary">← Back to Scheduled</a>
+    </div>
+</div>
+
+<div id="detail-container">
+    <div class="text-muted text-center" style="padding:2rem">Loading...</div>
+</div>
+
+<!-- Action Modal -->
+<div id="action-modal" class="modal hidden">
+    <div class="modal-backdrop" onclick="closeModal()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modal-title">Stage Action</h3>
+            <button class="btn btn-icon" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <p id="modal-description"></p>
+            <label for="reason-input">Reason (optional):</label>
+            <input type="text" id="reason-input" class="input" placeholder="Why are you making this change?">
+            <input type="hidden" id="modal-action">
+        </div>
+        <div class="modal-footer">
+            <button class="btn" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" id="modal-confirm" onclick="confirmAction()">Stage Change</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SCAN_ID = {{ scan_id | tojson }};
+let currentScan = null;
+
+document.addEventListener('DOMContentLoaded', loadDetail);
+
+async function loadDetail() {
+    try {
+        const res = await fetch(`/api/scheduled/${encodeURIComponent(SCAN_ID)}/detail`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        currentScan = json.data;
+        renderDetail(json.data);
+    } catch (e) {
+        // Fall back to list
+        try {
+            const res2 = await fetch('/api/scheduled');
+            const json2 = await res2.json();
+            if (json2.success) {
+                const scan = json2.data.find(s => String(s.scan_id) === String(SCAN_ID) || String(s.id) === String(SCAN_ID));
+                if (scan) { currentScan = scan; renderDetail(scan); return; }
+            }
+        } catch (_) {}
+        document.getElementById('detail-container').innerHTML =
+            `<div class="text-danger text-center" style="padding:2rem">Failed to load scan: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function renderDetail(scan) {
+    const active = scan.active;
+    const title = scan.title || 'Untitled';
+
+    document.getElementById('detail-container').innerHTML = `
+        <div class="card" style="margin-bottom:1rem">
+            <div class="card-body">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem">
+                    <div>
+                        <h2 style="margin:0 0 0.25rem">${escapeHtml(title)}</h2>
+                        <div class="scan-ref">ID: ${escapeHtml(String(scan.scan_id || scan.id || SCAN_ID))}</div>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                        <span class="status-badge ${active ? 'status-active' : 'status-inactive'}">
+                            ${active ? '✓ Active' : '○ Inactive'}
+                        </span>
+                        ${active
+                            ? `<button class="btn btn-warning" onclick="openModal('deactivate')">⏸ Stage Deactivate</button>`
+                            : `<button class="btn btn-success" onclick="openModal('activate')">▶ Stage Activate</button>`
+                        }
+                        <a href="/scheduled/${encodeURIComponent(SCAN_ID)}/edit" class="btn btn-secondary">✏️ Edit</a>
+                        <button class="btn btn-danger" onclick="openModal('delete')">🗑️ Stage Delete</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <table class="table">
+                    <tbody>
+                        <tr><th>Target</th><td>${escapeHtml(scan.target || '—')}</td></tr>
+                        <tr><th>Option Profile</th><td>${escapeHtml(scan.option_profile || '—')}</td></tr>
+                        <tr><th>Scanner</th><td>${escapeHtml(scan.scanner || scan.iscanner_name || '—')}</td></tr>
+                        <tr><th>Schedule</th><td>${escapeHtml(scan.schedule || '—')}</td></tr>
+                        <tr><th>Next Launch</th><td>${formatDate(scan.next_launch)}</td></tr>
+                        <tr><th>Last Launch</th><td>${formatDate(scan.last_launch)}</td></tr>
+                        <tr><th>Time Zone</th><td>${escapeHtml(scan.time_zone || '—')}</td></tr>
+                        <tr><th>Modified</th><td>${formatDate(scan.modified)}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+function openModal(action) {
+    if (!currentScan) return;
+    const title = currentScan.title || SCAN_ID;
+    const configs = {
+        activate:   { label: 'Stage Activation',   desc: `Activate scheduled scan: "${title}"`,   cls: 'btn-success' },
+        deactivate: { label: 'Stage Deactivation',  desc: `Deactivate scheduled scan: "${title}"`, cls: 'btn-warning' },
+        delete:     { label: 'Stage Deletion',      desc: `Delete scheduled scan: "${title}". This cannot be undone once applied.`, cls: 'btn-danger' },
+    };
+    const cfg = configs[action];
+    document.getElementById('modal-title').textContent = cfg.label;
+    document.getElementById('modal-description').textContent = cfg.desc;
+    document.getElementById('modal-action').value = action;
+    document.getElementById('modal-confirm').className = `btn ${cfg.cls}`;
+    document.getElementById('modal-confirm').textContent = cfg.label;
+    document.getElementById('reason-input').value = '';
+    document.getElementById('action-modal').classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('action-modal').classList.add('hidden');
+}
+
+async function confirmAction() {
+    const action = document.getElementById('modal-action').value;
+    const reason = document.getElementById('reason-input').value;
+    const title = currentScan ? (currentScan.title || '') : '';
+    try {
+        const res = await fetch('/api/stage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, scan_ref: SCAN_ID, title, reason })
+        });
+        const json = await res.json();
+        if (json.success) {
+            showToast(`Staged: ${action}`, 'success');
+            closeModal();
+            updateStagingBadge();
+        } else {
+            showToast(json.error || 'Failed to stage', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function formatDate(d) {
+    if (!d) return '—';
+    try { return new Date(d).toLocaleString(); } catch { return d; }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

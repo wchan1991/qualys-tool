@@ -128,6 +128,48 @@ def tags_page():
     return render_template("tags.html")
 
 
+@app.route("/scans/<path:scan_ref>")
+def scan_detail_page(scan_ref):
+    """Scan detail page."""
+    return render_template("scan_detail.html", scan_ref=scan_ref)
+
+
+@app.route("/scheduled/new")
+def scheduled_new_page():
+    """Create new scheduled scan form."""
+    return render_template("scan_form.html", mode="create_scheduled")
+
+
+@app.route("/scheduled/<scan_id>/edit")
+def scheduled_edit_page(scan_id):
+    """Edit scheduled scan form."""
+    return render_template("scan_form.html", mode="edit_scheduled", scan_id=scan_id)
+
+
+@app.route("/scheduled/<scan_id>")
+def scheduled_detail_page(scan_id):
+    """Scheduled scan detail page."""
+    return render_template("scheduled_detail.html", scan_id=scan_id)
+
+
+@app.route("/scans/new")
+def scan_launch_page():
+    """Launch on-demand scan form."""
+    return render_template("scan_form.html", mode="launch")
+
+
+@app.route("/lookup")
+def lookup_page():
+    """Target reverse lookup page."""
+    return render_template("target_lookup.html")
+
+
+@app.route("/calendar")
+def calendar_page():
+    """Calendar view."""
+    return render_template("calendar.html")
+
+
 # ============================================================
 # API ROUTES
 # ============================================================
@@ -217,9 +259,28 @@ def api_stage():
     elif action == "delete":
         title = data.get("title", "")
         change_id = manager.stage_delete_scheduled(scan_ref, title, reason)
+    # Payload-based create / modify / launch
+    elif action == "create_scheduled":
+        payload = data.get("payload")
+        if not payload:
+            raise ValueError("payload required for create_scheduled")
+        change_id = manager.stage_create_scheduled(payload, reason)
+    elif action == "modify_scheduled":
+        if not scan_ref:
+            raise ValueError("scan_ref required for modify_scheduled")
+        current = data.get("current", {})
+        changes = data.get("changes", {})
+        if not changes:
+            raise ValueError("changes required for modify_scheduled")
+        change_id = manager.stage_modify_scheduled(scan_ref, current, changes, reason)
+    elif action == "launch":
+        payload = data.get("payload")
+        if not payload:
+            raise ValueError("payload required for launch")
+        change_id = manager.stage_launch_scan(payload, reason)
     else:
         raise ValueError(f"Unknown action: {action}")
-    
+
     return {"change_id": change_id, "action": action, "scan_ref": scan_ref}
 
 
@@ -381,6 +442,71 @@ def api_refresh_all():
     manager = get_manager()
     counts = manager.refresh_all()
     return counts
+
+
+# ============================================================
+# DETAIL API ROUTES
+# ============================================================
+
+@app.route("/api/scans/<path:scan_ref>/detail")
+@api_response
+def api_scan_detail(scan_ref):
+    """Get full detail for a running/completed scan."""
+    manager = get_manager()
+    return manager.get_scan_detail(scan_ref)
+
+
+@app.route("/api/scheduled/<scan_id>/detail")
+@api_response
+def api_scheduled_detail(scan_id):
+    """Get full detail for a scheduled scan."""
+    manager = get_manager()
+    return manager.get_scheduled_scan_detail(scan_id)
+
+
+# ============================================================
+# REVERSE LOOKUP API
+# ============================================================
+
+@app.route("/api/lookup")
+@api_response
+def api_lookup():
+    """Reverse target lookup: find scans using a given target."""
+    target_type = request.args.get("type", "ip")
+    target_value = request.args.get("value", "").strip()
+    if not target_value:
+        raise ValueError("value query parameter is required")
+    manager = get_manager()
+    return manager.find_scans_using_target(target_type, target_value)
+
+
+# ============================================================
+# TARGET SOURCES (for form dropdowns)
+# ============================================================
+
+@app.route("/api/target-sources")
+@api_response
+def api_target_sources():
+    """Get asset groups, tags, scanners, and option profiles for form dropdowns."""
+    manager = get_manager()
+    return manager.get_target_sources()
+
+
+# ============================================================
+# CALENDAR API
+# ============================================================
+
+@app.route("/api/calendar")
+@api_response
+def api_calendar():
+    """Get calendar events for FullCalendar."""
+    start = request.args.get("start", "")
+    end = request.args.get("end", "")
+    event_type = request.args.get("type", "scheduled")
+    if not start or not end:
+        raise ValueError("start and end query parameters are required")
+    manager = get_manager()
+    return manager.get_calendar_events(start, end, event_type)
 
 
 # ============================================================

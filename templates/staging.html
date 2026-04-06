@@ -101,16 +101,49 @@ function renderStaged(changes) {
         'cancel': 'btn-danger',
         'activate': 'btn-success',
         'deactivate': 'btn-warning',
-        'delete': 'btn-danger'
+        'delete': 'btn-danger',
+        'create': 'btn-success',
+        'modify': 'btn-secondary',
+        'launch': 'btn-primary',
     };
-    
+
     // Scan type icons
     const typeIcons = {
         'scan': '🔍',
         'scheduled': '📅'
     };
-    
-    tbody.innerHTML = changes.map(change => `
+
+    tbody.innerHTML = changes.map(change => {
+        const action = change.action || '';
+        const isPayload = ['create', 'modify', 'launch'].includes(action);
+        let refCell = '';
+        let extraDetail = '';
+
+        if (isPayload && change.payload) {
+            let payload = {};
+            try { payload = JSON.parse(change.payload); } catch (_) {}
+
+            if (action === 'modify') {
+                const ch = payload.changes || {};
+                const parts = [];
+                if (ch.title) parts.push(`Title → <em>${escapeHtml(ch.title)}</em>`);
+                if (ch.target) parts.push(`Target → <em>${escapeHtml(typeof ch.target === 'object' ? ch.target.value : ch.target)}</em>`);
+                if (ch.option_profile) parts.push(`Profile → <em>${escapeHtml(ch.option_profile)}</em>`);
+                extraDetail = parts.length ? `<div style="font-size:0.8rem;color:var(--text-muted,#666);margin-top:0.2rem">${parts.join(' · ')}</div>` : '';
+                refCell = `<div class="scan-ref">${escapeHtml(change.scan_ref)}</div>`;
+            } else {
+                const title = payload.title || payload.scan_title || '';
+                refCell = title ? `<div class="scan-ref">${escapeHtml(title)}</div>` : '<div class="scan-ref text-muted">New</div>';
+                if (payload.target) {
+                    const tval = typeof payload.target === 'object' ? `${payload.target.type}: ${payload.target.value}` : payload.target;
+                    extraDetail = `<div style="font-size:0.8rem;color:var(--text-muted,#666);margin-top:0.2rem">${escapeHtml(tval)}</div>`;
+                }
+            }
+        } else {
+            refCell = `<div class="scan-ref">${escapeHtml(change.scan_ref)}</div>`;
+        }
+
+        return `
         <tr>
             <td>
                 <span class="type-badge ${change.scan_type || 'scan'}">
@@ -118,13 +151,11 @@ function renderStaged(changes) {
                 </span>
             </td>
             <td>
-                <span class="btn btn-sm ${actionClasses[change.action] || ''}" style="pointer-events:none">
-                    ${change.action.toUpperCase()}
+                <span class="btn btn-sm ${actionClasses[action] || ''}" style="pointer-events:none">
+                    ${action.toUpperCase()}
                 </span>
             </td>
-            <td>
-                <div class="scan-ref">${escapeHtml(change.scan_ref)}</div>
-            </td>
+            <td>${refCell}${extraDetail}</td>
             <td>${escapeHtml(change.description || '—')}</td>
             <td>${formatDate(change.staged_at)}</td>
             <td>
@@ -133,7 +164,8 @@ function renderStaged(changes) {
                 </button>
             </td>
         </tr>
-    `).join('');
+        `;
+    }).join('');
 }
 
 async function discardChange(changeId) {

@@ -29,11 +29,12 @@ class ChangeType(Enum):
     PAUSE = "pause"
     RESUME = "resume"
     CANCEL = "cancel"
+    LAUNCH = "launch"  # one-shot on-demand scan
     # Scheduled scan operations
     ACTIVATE = "activate"
     DEACTIVATE = "deactivate"
     DELETE = "delete"
-    # General
+    # General (used for scheduled scan create/edit)
     CREATE = "create"
     MODIFY = "modify"
 
@@ -73,6 +74,7 @@ class StagedChange:
     staged_at: str
     description: str
     applied: bool = False
+    payload: str = ""  # JSON blob for CREATE/MODIFY/LAUNCH (full config)
 
 
 class ScanDatabase:
@@ -165,6 +167,8 @@ class ScanDatabase:
         """)
         
         # Staging area for changes (supports both scan types)
+        # payload TEXT carries the full JSON config for CREATE/MODIFY/LAUNCH
+        # actions where old_value/new_value strings are insufficient.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS staged_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,10 +179,11 @@ class ScanDatabase:
                 new_value TEXT,
                 staged_at TEXT NOT NULL,
                 description TEXT,
-                applied INTEGER DEFAULT 0
+                applied INTEGER DEFAULT 0,
+                payload TEXT
             )
         """)
-        
+
         # Tag history for reporting
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tag_usage (
@@ -188,13 +193,27 @@ class ScanDatabase:
                 recorded_at TEXT NOT NULL
             )
         """)
-        
-        # Index for faster queries
+
+        # Normalized targets for scheduled scans, used by reverse lookup.
+        # Repopulated each time scheduled scans are refreshed.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS scheduled_scan_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_value TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            )
+        """)
+
+        # Indexes for faster queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_scans_ref ON scans(ref)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_scans_fetched ON scans(fetched_at)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_staged_ref ON staged_changes(scan_ref)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_id ON scheduled_scans(scan_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags_tag ON tag_usage(tag)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sst_lookup ON scheduled_scan_targets(target_type, target_value)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sst_scan_id ON scheduled_scan_targets(scan_id)")
         
         # Run migrations for existing databases
         self._run_migrations(cursor)
@@ -216,10 +235,18 @@ class ScanDatabase:
         if 'scan_type' not in columns:
             logger.info("Migrating database: adding scan_type column to staged_changes")
             cursor.execute("""
-                ALTER TABLE staged_changes 
+                ALTER TABLE staged_changes
                 ADD COLUMN scan_type TEXT DEFAULT 'scan'
             """)
             logger.info("Migration complete: scan_type column added")
+
+        if 'payload' not in columns:
+            logger.info("Migrating database: adding payload column to staged_changes")
+            cursor.execute("""
+                ALTER TABLE staged_changes
+                ADD COLUMN payload TEXT
+            """)
+            logger.info("Migration complete: payload column added")
     
     # ========================================================
     # SCAN STORAGE
@@ -319,18 +346,24 @@ class ScanDatabase:
     def save_scheduled_scans(self, scans: List[Dict[str, Any]]) -> int:
         """
         Save scheduled scans as a point-in-time snapshot.
-        
+
+        Also rewrites scheduled_scan_targets so reverse-lookup queries
+        always reflect the latest refresh.
+
         Returns:
             Number of scheduled scans saved
         """
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
         count = 0
-        
+
+        # Clear and repopulate the targets index for the new snapshot
+        cursor.execute("DELETE FROM scheduled_scan_targets")
+
         for scan in scans:
             try:
                 cursor.execute("""
-                    INSERT INTO scheduled_scans 
+                    INSERT INTO scheduled_scans
                     (scan_id, title, target, active, option_profile, scanner,
                      schedule, next_launch, last_launch, owner, raw_data, fetched_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -349,13 +382,109 @@ class ScanDatabase:
                     now,
                 ))
                 count += 1
-                    
+
+                # Index normalized targets for reverse lookup
+                scan_id = scan.get("id", "")
+                for tgt in scan.get("targets", []) or []:
+                    cursor.execute("""
+                        INSERT INTO scheduled_scan_targets
+                        (scan_id, target_type, target_value, fetched_at)
+                        VALUES (?, ?, ?, ?)
+                    """, (scan_id, tgt.get("type", ""), tgt.get("value", ""), now))
+
             except sqlite3.IntegrityError:
                 logger.debug(f"Scheduled scan {scan.get('id')} already exists for {now}")
-        
+
         self.conn.commit()
         logger.info(f"Saved {count} scheduled scans to database")
         return count
+
+    def find_scans_by_target(
+        self, target_type: str, target_value: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Find all scans (scheduled + recent) that include a given target.
+
+        Args:
+            target_type: 'ip' | 'range' | 'asset_group' | 'tag' | 'ip_list'
+            target_value: literal value to match
+
+        Returns:
+            {'scheduled': [...], 'recent': [...]}
+        """
+        cursor = self.conn.cursor()
+
+        # --- scheduled scans: indexed lookup on scheduled_scan_targets ---
+        scheduled: List[Dict[str, Any]] = []
+        if target_type in ("ip", "range"):
+            # IP-in-CIDR/range membership: pull all ip/range targets and
+            # check membership in Python (small N, fast enough)
+            cursor.execute("""
+                SELECT DISTINCT t.scan_id, t.target_type, t.target_value, s.title
+                FROM scheduled_scan_targets t
+                LEFT JOIN scheduled_scans s ON s.scan_id = t.scan_id
+                WHERE t.target_type IN ('ip', 'range')
+            """)
+            try:
+                import ipaddress
+                needle = ipaddress.ip_address(target_value)
+            except (ValueError, ImportError):
+                needle = None
+
+            for row in cursor.fetchall():
+                hit = False
+                stored = row["target_value"]
+                if stored == target_value:
+                    hit = True
+                elif needle is not None:
+                    try:
+                        if "-" in stored:
+                            start, end = [ipaddress.ip_address(p.strip()) for p in stored.split("-", 1)]
+                            hit = start <= needle <= end
+                        elif "/" in stored:
+                            hit = needle in ipaddress.ip_network(stored, strict=False)
+                    except ValueError:
+                        pass
+                if hit:
+                    scheduled.append({
+                        "scan_id": row["scan_id"],
+                        "title": row["title"],
+                        "matched_target": f"{row['target_type']}:{stored}",
+                    })
+        else:
+            cursor.execute("""
+                SELECT DISTINCT t.scan_id, s.title, t.target_value
+                FROM scheduled_scan_targets t
+                LEFT JOIN scheduled_scans s ON s.scan_id = t.scan_id
+                WHERE t.target_type = ? AND t.target_value = ?
+            """, (target_type, target_value))
+            for row in cursor.fetchall():
+                scheduled.append({
+                    "scan_id": row["scan_id"],
+                    "title": row["title"],
+                    "matched_target": f"{target_type}:{row['target_value']}",
+                })
+
+        # --- recent (running) scans: LIKE search against scans.target ---
+        # Only meaningful for IP / asset_group / tag literal text
+        recent: List[Dict[str, Any]] = []
+        cursor.execute("SELECT MAX(fetched_at) FROM scans")
+        row = cursor.fetchone()
+        if row and row[0]:
+            latest = row[0]
+            cursor.execute("""
+                SELECT ref, title, target
+                FROM scans
+                WHERE fetched_at = ? AND target LIKE ?
+            """, (latest, f"%{target_value}%"))
+            for r in cursor.fetchall():
+                recent.append({
+                    "ref": r["ref"],
+                    "title": r["title"],
+                    "matched_target": r["target"],
+                })
+
+        return {"scheduled": scheduled, "recent": recent}
     
     def get_latest_scheduled_scans(self) -> List[Dict[str, Any]]:
         """Get the most recent snapshot of all scheduled scans."""
@@ -406,45 +535,50 @@ class ScanDatabase:
         old_value: str = "",
         new_value: str = "",
         description: str = "",
-        scan_type: str = "scan"
+        scan_type: str = "scan",
+        payload: Optional[Dict[str, Any]] = None,
     ) -> int:
         """
         Stage a change for review before applying.
-        
+
         Args:
-            scan_ref: Scan reference ID or scheduled scan ID
-            change_type: Type of change (pause, resume, activate, etc.)
+            scan_ref: Scan reference ID or scheduled scan ID. For CREATE/LAUNCH
+                actions where there is no existing ref, pass the proposed title.
+            change_type: Type of change (pause, resume, activate, create, ...)
             old_value: Previous value (for display)
             new_value: New value (for display)
             description: Human-readable description
             scan_type: 'scan' for running scans, 'scheduled' for scheduled scans
-        
+            payload: Optional dict serialized to JSON for CREATE/MODIFY/LAUNCH
+                actions where the full configuration must be carried.
+
         Returns:
             ID of the staged change
         """
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
-        
+        payload_json = json.dumps(payload) if payload is not None else None
+
         cursor.execute("""
-            INSERT INTO staged_changes 
-            (scan_ref, scan_type, change_type, old_value, new_value, staged_at, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (scan_ref, scan_type, change_type.value, old_value, new_value, now, description))
-        
+            INSERT INTO staged_changes
+            (scan_ref, scan_type, change_type, old_value, new_value, staged_at, description, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (scan_ref, scan_type, change_type.value, old_value, new_value, now, description, payload_json))
+
         self.conn.commit()
         change_id = cursor.lastrowid
         logger.info(f"Staged change {change_id}: {change_type.value} on {scan_type}/{scan_ref}")
         return change_id
-    
+
     def get_staged_changes(self, pending_only: bool = True) -> List[StagedChange]:
         """Get all staged changes."""
         cursor = self.conn.cursor()
-        
+
         if pending_only:
             cursor.execute("""
                 SELECT id, scan_ref, COALESCE(scan_type, 'scan') as scan_type,
-                       change_type, old_value, new_value, 
-                       staged_at, description, applied
+                       change_type, old_value, new_value,
+                       staged_at, description, applied, payload
                 FROM staged_changes
                 WHERE applied = 0
                 ORDER BY staged_at DESC
@@ -453,11 +587,11 @@ class ScanDatabase:
             cursor.execute("""
                 SELECT id, scan_ref, COALESCE(scan_type, 'scan') as scan_type,
                        change_type, old_value, new_value,
-                       staged_at, description, applied
+                       staged_at, description, applied, payload
                 FROM staged_changes
                 ORDER BY staged_at DESC
             """)
-        
+
         return [StagedChange(*row) for row in cursor.fetchall()]
     
     def mark_change_applied(self, change_id: int) -> None:

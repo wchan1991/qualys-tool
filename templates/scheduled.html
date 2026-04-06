@@ -5,6 +5,7 @@
 <div class="page-header">
     <h1>📅 Scheduled Scans</h1>
     <div class="header-actions">
+        <a href="/scheduled/new" class="btn btn-success">+ New Scheduled Scan</a>
         <button id="refresh-btn" class="btn btn-primary" onclick="refreshScheduled()">
             🔄 Refresh from Qualys
         </button>
@@ -132,7 +133,7 @@
         tbody.innerHTML = scans.map(scan => `
             <tr data-id="${scan.id}">
                 <td>
-                    <strong>${escapeHtml(scan.title || 'Untitled')}</strong>
+                    <a href="/scheduled/${encodeURIComponent(scan.id)}"><strong>${escapeHtml(scan.title || 'Untitled')}</strong></a>
                     <br><small class="text-muted">${escapeHtml(scan.option_profile || '')}</small>
                 </td>
                 <td class="target-cell">${escapeHtml(scan.target || 'N/A')}</td>
@@ -173,13 +174,29 @@
         }
         
         buttons.push(`
-            <button class="btn btn-small btn-danger" 
+            <button class="btn btn-small btn-danger"
                     onclick="openActionModal('delete', '${scan.id}', '${escapeHtml(scan.title)}')"
                     title="Stage deletion">
                 🗑️ Delete
             </button>
         `);
-        
+
+        buttons.push(`
+            <a class="btn btn-small btn-secondary"
+               href="/scheduled/${encodeURIComponent(scan.id)}/edit"
+               title="Edit scheduled scan">
+                ✏️ Edit
+            </a>
+        `);
+
+        buttons.push(`
+            <a class="btn btn-small"
+               href="/scheduled/${encodeURIComponent(scan.id)}"
+               title="View details">
+                🔍 Details
+            </a>
+        `);
+
         return buttons.join(' ');
     }
     

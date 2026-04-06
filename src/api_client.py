@@ -197,35 +197,42 @@ class QualysClient:
         params: Dict = None,
         data: Dict = None,
         timeout: int = None,
+        json_body: Any = None,
+        headers: Dict[str, str] = None,
     ) -> requests.Response:
         """
         Make an authenticated API request.
-        
+
         Args:
             method: HTTP method (GET, POST, etc.)
             endpoint: API endpoint path
             params: Query parameters
-            data: POST data
+            data: POST form data
             timeout: Request timeout in seconds (defaults to config.timeout)
+            json_body: Optional JSON body (for QPS endpoints).
+                When set, sent as the request body in JSON form.
+            headers: Optional per-request headers (merged with session headers).
         """
         if self._rate_limiter:
             self._rate_limiter.acquire()
-        
+
         self._authenticate()
-        
+
         session = self._get_session()
         url = f"{self.config.api_url}{endpoint}"
         request_timeout = timeout or self.config.timeout
-        
+
         try:
             response = session.request(
                 method=method,
                 url=url,
                 params=params,
                 data=data,
+                json=json_body,
+                headers=headers,
                 timeout=request_timeout,
             )
-            
+
             if response.status_code == 401:
                 self._authenticated = False
                 self._authenticate()
@@ -234,6 +241,8 @@ class QualysClient:
                     url=url,
                     params=params,
                     data=data,
+                    json=json_body,
+                    headers=headers,
                     timeout=request_timeout,
                 )
             
@@ -253,20 +262,29 @@ class QualysClient:
     # SCAN OPERATIONS
     
     def list_scans(self, state: str = None, scan_type: str = None) -> List[Dict[str, Any]]:
-        """List vulnerability scans."""
+        """
+        List vulnerability scans.
+
+        API Endpoint: GET /api/3.0/fo/scan/?action=list
+        v2.0 is EOL June 2026 (per Qualys API VM/PC User Guide v10.38.2).
+        """
         params = {"action": "list"}
         if state:
             params["state"] = state
         if scan_type:
             params["type"] = scan_type
-        
-        response = self._request("GET", "/api/2.0/fo/scan/", params=params)
+
+        response = self._request("GET", "/api/3.0/fo/scan/", params=params)
         return self._parse_scans(response.text)
-    
+
     def get_scan(self, scan_ref: str) -> Dict[str, Any]:
-        """Get details for a specific scan."""
+        """
+        Get details for a specific scan.
+
+        API Endpoint: GET /api/3.0/fo/scan/?action=list&scan_ref=...
+        """
         params = {"action": "list", "scan_ref": scan_ref, "show_status": 1}
-        response = self._request("GET", "/api/2.0/fo/scan/", params=params)
+        response = self._request("GET", "/api/3.0/fo/scan/", params=params)
         scans = self._parse_scans(response.text)
         return scans[0] if scans else {}
     
@@ -303,9 +321,14 @@ class QualysClient:
         return self._parse_appliances(response.text)
     
     def list_option_profiles(self) -> List[Dict[str, Any]]:
-        """List scan option profiles."""
+        """
+        List VM scan option profiles.
+
+        API Endpoint: GET /api/4.0/fo/subscription/option_profile/vm/?action=list
+        Latest VM-module version per Qualys API VM/PC User Guide v10.38.2.
+        """
         response = self._request(
-            "GET", "/api/2.0/fo/subscription/option_profile/",
+            "GET", "/api/4.0/fo/subscription/option_profile/vm/",
             params={"action": "list"}
         )
         return self._parse_profiles(response.text)
@@ -313,17 +336,18 @@ class QualysClient:
     def list_scheduled_scans(self) -> List[Dict[str, Any]]:
         """
         List scheduled scans (VM scan schedules).
-        
+
         Uses a longer timeout (90s) as this API can be slow when there are
         many scheduled scans configured.
-        
-        API Endpoint: GET /api/2.0/fo/schedule/scan/?action=list
-        Documentation: https://docs.qualys.com/en/vm/api/scans/vm_schedules/list_scan_schedules.htm
+
+        API Endpoint: GET /api/5.0/fo/schedule/scan/?action=list
+        v2.0/3.0/4.0 are EOL June 2026 per Qualys API VM/PC User Guide v10.38.2.
+        v5.0 response adds richer time-zone info and a MODIFIED date field.
         """
         logger.info("Fetching scheduled scans from Qualys API...")
-        
+
         response = self._request(
-            "GET", "/api/2.0/fo/schedule/scan/",
+            "GET", "/api/5.0/fo/schedule/scan/",
             params={"action": "list"},
             timeout=90  # Longer timeout for scheduled scans
         )
@@ -382,13 +406,21 @@ class QualysClient:
         return appliances
     
     def _parse_profiles(self, xml_text: str) -> List[Dict[str, Any]]:
+        """
+        Parse VM option profiles from /api/4.0/fo/subscription/option_profile/vm/
+        The profile name lives in BASIC_INFO/GROUP_NAME (TITLE is a legacy fallback).
+        """
         profiles = []
         try:
             root = ET.fromstring(xml_text)
             for elem in root.findall(".//OPTION_PROFILE"):
+                title = (
+                    self._xml_text(elem, "BASIC_INFO/GROUP_NAME")
+                    or self._xml_text(elem, "BASIC_INFO/TITLE")
+                )
                 profiles.append({
                     "id": self._xml_text(elem, "BASIC_INFO/ID"),
-                    "title": self._xml_text(elem, "BASIC_INFO/TITLE"),
+                    "title": title,
                     "default": self._xml_text(elem, "BASIC_INFO/IS_DEFAULT"),
                 })
         except ET.ParseError as e:
@@ -496,20 +528,55 @@ class QualysClient:
     
     def _parse_single_scheduled_scan(self, elem) -> Dict[str, Any]:
         """Parse a single SCAN element into a dictionary."""
-        # Extract target - try multiple paths
-        target = self._xml_text(elem, "TARGET")
-        if not target:
-            target = self._xml_text(elem, "ASSET_GROUP_TITLE_LIST/ASSET_GROUP_TITLE")
-        if not target:
-            tag_include = self._xml_text(elem, "ASSET_TAGS/TAG_SET_INCLUDE")
-            if tag_include:
-                target = f"Tags: {tag_include}"
-        if not target:
-            # Try USER_ENTERED_IPS
-            ip_start = self._xml_text(elem, "USER_ENTERED_IPS/RANGE/START")
-            ip_end = self._xml_text(elem, "USER_ENTERED_IPS/RANGE/END")
-            if ip_start:
-                target = f"{ip_start}-{ip_end}" if ip_end and ip_end != ip_start else ip_start
+        # Collect a normalized target list. Each entry: {type, value}.
+        # type ∈ {"ip", "range", "asset_group", "tag", "ip_list"}
+        targets: List[Dict[str, str]] = []
+
+        raw_target = self._xml_text(elem, "TARGET")
+        if raw_target:
+            for token in [t.strip() for t in raw_target.replace("\n", ",").split(",") if t.strip()]:
+                ttype = "range" if "-" in token else "ip"
+                targets.append({"type": ttype, "value": token})
+
+        for ag in elem.findall("ASSET_GROUP_TITLE_LIST/ASSET_GROUP_TITLE"):
+            if ag.text and ag.text.strip():
+                targets.append({"type": "asset_group", "value": ag.text.strip()})
+
+        for tag in elem.findall("ASSET_TAGS/TAG_SET_INCLUDE/TAG"):
+            tag_name = (tag.text or "").strip()
+            if tag_name:
+                targets.append({"type": "tag", "value": tag_name})
+        # Some responses inline tag names as a comma list
+        tag_include_csv = self._xml_text(elem, "ASSET_TAGS/TAG_SET_INCLUDE")
+        if tag_include_csv and not any(t["type"] == "tag" for t in targets):
+            for name in [t.strip() for t in tag_include_csv.split(",") if t.strip()]:
+                targets.append({"type": "tag", "value": name})
+
+        for rng in elem.findall("USER_ENTERED_IPS/RANGE"):
+            start = self._xml_text(rng, "START")
+            end = self._xml_text(rng, "END")
+            if start:
+                value = f"{start}-{end}" if end and end != start else start
+                targets.append({"type": "range" if end and end != start else "ip", "value": value})
+
+        for ipl in elem.findall("IP_LIST_TITLE_LIST/IP_LIST_TITLE"):
+            if ipl.text and ipl.text.strip():
+                targets.append({"type": "ip_list", "value": ipl.text.strip()})
+
+        # Build a friendly display string for the existing UI columns
+        if targets:
+            grouped: Dict[str, List[str]] = {}
+            for t in targets:
+                grouped.setdefault(t["type"], []).append(t["value"])
+            parts = []
+            for ttype in ("ip", "range", "asset_group", "tag", "ip_list"):
+                if ttype in grouped:
+                    label = {"ip": "", "range": "", "asset_group": "AG", "tag": "Tags", "ip_list": "IPList"}[ttype]
+                    joined = ", ".join(grouped[ttype])
+                    parts.append(f"{label}: {joined}" if label else joined)
+            target = "; ".join(parts)
+        else:
+            target = ""
         
         # Extract schedule info
         schedule_elem = elem.find("SCHEDULE")
@@ -558,17 +625,29 @@ class QualysClient:
         # 1 = active, 0 = deactivated, 2 = active not paused, 3 = paused
         is_active = active_val in ("1", "2")
         
+        # v5.0 fields: TIME_ZONE/TIME_ZONE_CODE, MODIFIED date
+        time_zone_code = self._xml_text(elem, "SCHEDULE/TIME_ZONE/TIME_ZONE_CODE")
+        time_zone_details = self._xml_text(elem, "SCHEDULE/TIME_ZONE/TIME_ZONE_DETAILS")
+        modified = (
+            self._xml_text(elem, "MODIFIED")
+            or self._xml_text(elem, "MODIFIED_DATE")
+        )
+
         return {
             "id": scan_id,
             "title": self._xml_text(elem, "TITLE"),
             "active": is_active,
             "target": target or "N/A",
+            "targets": targets,  # normalized list for reverse lookup
             "option_profile": self._xml_text(elem, "OPTION_PROFILE/TITLE"),
             "scanner": self._xml_text(elem, "ISCANNER_NAME"),
             "schedule": schedule_text or "Scheduled",
             "next_launch": next_launch,
             "last_launch": last_launch,
             "owner": self._xml_text(elem, "USER_LOGIN"),
+            "time_zone": time_zone_code,
+            "time_zone_details": time_zone_details,
+            "modified": modified,
             "type": "scheduled",
         }
     
@@ -616,7 +695,294 @@ class QualysClient:
             data={"action": "delete", "id": scan_id}
         )
         return "deleted" in response.text.lower() or "success" in response.text.lower()
-    
+
+    # ============================================================
+    # CREATE / EDIT / LAUNCH
+    # ============================================================
+
+    def _build_target_params(self, target_spec: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Convert a unified target spec into Qualys form fields.
+
+        target_spec: {"type": "ips"|"asset_groups"|"tags"|"ip_list", "value": ...}
+        """
+        ttype = (target_spec or {}).get("type", "")
+        value = (target_spec or {}).get("value", "")
+
+        if ttype == "ips":
+            # value is a comma-separated string or list of IPs/ranges/CIDRs
+            ip_str = ",".join(value) if isinstance(value, list) else str(value)
+            return {"ip": ip_str}
+
+        if ttype == "asset_groups":
+            # value is a list of asset group titles (or comma string)
+            ag_str = ",".join(value) if isinstance(value, list) else str(value)
+            return {"asset_groups": ag_str}
+
+        if ttype == "tags":
+            # value is a list of tag names (or comma string)
+            tag_str = ",".join(value) if isinstance(value, list) else str(value)
+            return {
+                "target_from": "tags",
+                "tag_set_by": "name",
+                "tag_include_selector": "any",
+                "tag_set_include": tag_str,
+            }
+
+        if ttype == "ip_list":
+            # IP lists are resolved to literal IPs upstream (we receive the
+            # already-expanded IP string here as `value`).
+            ip_str = ",".join(value) if isinstance(value, list) else str(value)
+            return {"ip": ip_str}
+
+        raise ValueError(f"Unknown target type: {ttype!r}")
+
+    def _build_schedule_params(self, schedule: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Convert a unified schedule dict into Qualys schedule/scan form fields.
+
+        schedule: {
+            "occurrence": "daily"|"weekly"|"monthly",
+            "frequency_days": int (daily),
+            "frequency_weeks": int (weekly),
+            "weekdays": "monday,tuesday,..." (weekly),
+            "day_of_month": int (monthly),
+            "start_date": "YYYY-MM-DD",
+            "start_hour": 0..23,
+            "start_minute": 0..59,
+            "time_zone_code": "US-PT" (etc.),
+            "observe_dst": 0|1,
+            "recurrence": int (0 = unlimited),
+            "active": 0|1,
+        }
+        """
+        if not schedule:
+            return {}
+
+        params: Dict[str, str] = {}
+        occ = (schedule.get("occurrence") or "").lower()
+        params["occurrence"] = occ
+
+        if occ == "daily":
+            params["frequency_days"] = str(schedule.get("frequency_days", 1))
+        elif occ == "weekly":
+            params["frequency_weeks"] = str(schedule.get("frequency_weeks", 1))
+            if schedule.get("weekdays"):
+                params["weekdays"] = str(schedule["weekdays"])
+        elif occ == "monthly":
+            if schedule.get("day_of_month") is not None:
+                params["day_of_month"] = str(schedule["day_of_month"])
+            params["frequency_months"] = str(schedule.get("frequency_months", 1))
+
+        for src, dst in (
+            ("start_date", "start_date"),
+            ("start_hour", "start_hour"),
+            ("start_minute", "start_minute"),
+            ("time_zone_code", "time_zone_code"),
+            ("observe_dst", "observe_dst"),
+            ("recurrence", "recurrence"),
+            ("active", "active"),
+        ):
+            if schedule.get(src) is not None:
+                params[dst] = str(schedule[src])
+
+        return params
+
+    def _build_scan_form(
+        self,
+        payload: Dict[str, Any],
+        action: str,
+        include_schedule: bool = False,
+    ) -> Dict[str, str]:
+        """
+        Compose the form-data dict for launch_scan / create_scheduled_scan /
+        update_scheduled_scan from a unified payload.
+
+        payload keys (all optional unless noted):
+            scan_title (required for create/launch)
+            option_id OR option_title (one required)
+            iscanner_id OR iscanner_name (one usually required)
+            target: {type, value}  (required for create/launch)
+            ip_network_id
+            priority
+            schedule: {...}  (only used when include_schedule=True)
+        """
+        form: Dict[str, str] = {"action": action}
+
+        if payload.get("scan_title"):
+            form["scan_title"] = str(payload["scan_title"])
+
+        if payload.get("option_id"):
+            form["option_id"] = str(payload["option_id"])
+        elif payload.get("option_title"):
+            form["option_title"] = str(payload["option_title"])
+
+        if payload.get("iscanner_id"):
+            form["iscanner_id"] = str(payload["iscanner_id"])
+        elif payload.get("iscanner_name"):
+            form["iscanner_name"] = str(payload["iscanner_name"])
+
+        if payload.get("ip_network_id"):
+            form["ip_network_id"] = str(payload["ip_network_id"])
+        if payload.get("priority") is not None:
+            form["priority"] = str(payload["priority"])
+
+        if payload.get("target"):
+            form.update(self._build_target_params(payload["target"]))
+
+        if include_schedule and payload.get("schedule"):
+            form.update(self._build_schedule_params(payload["schedule"]))
+
+        return form
+
+    def launch_scan(self, payload: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Launch an on-demand VM scan.
+
+        API: POST /api/2.0/fo/scan/?action=launch
+        Returns: {"id": "...", "reference": "scan/..."} parsed from
+        the SIMPLE_RETURN ITEM_LIST.
+        """
+        form = self._build_scan_form(payload, action="launch", include_schedule=False)
+        if "scan_title" not in form:
+            raise ValueError("launch_scan requires scan_title")
+        if "option_id" not in form and "option_title" not in form:
+            raise ValueError("launch_scan requires option_id or option_title")
+        if "ip" not in form and "asset_groups" not in form and "target_from" not in form:
+            raise ValueError("launch_scan requires a target (ips/asset_groups/tags)")
+
+        logger.info(f"Launching scan: {form.get('scan_title')}")
+        response = self._request("POST", "/api/2.0/fo/scan/", data=form)
+        return self._parse_simple_return_items(response.text)
+
+    def create_scheduled_scan(self, payload: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Create a new scheduled VM scan.
+
+        API: POST /api/2.0/fo/schedule/scan/?action=create
+        Returns: {"id": "..."} parsed from the SIMPLE_RETURN ITEM_LIST.
+        """
+        form = self._build_scan_form(payload, action="create", include_schedule=True)
+        if "scan_title" not in form:
+            raise ValueError("create_scheduled_scan requires scan_title")
+        if "occurrence" not in form:
+            raise ValueError("create_scheduled_scan requires schedule.occurrence")
+
+        logger.info(f"Creating scheduled scan: {form.get('scan_title')}")
+        response = self._request("POST", "/api/2.0/fo/schedule/scan/", data=form)
+        return self._parse_simple_return_items(response.text)
+
+    def update_scheduled_scan(self, scan_id: str, payload: Dict[str, Any]) -> bool:
+        """
+        Update fields on an existing scheduled scan.
+
+        API: POST /api/2.0/fo/schedule/scan/?action=update
+        Only the fields present in `payload` are sent.
+        """
+        form = self._build_scan_form(payload, action="update", include_schedule=True)
+        form["id"] = str(scan_id)
+
+        logger.info(f"Updating scheduled scan {scan_id}: keys={list(form.keys())}")
+        response = self._request("POST", "/api/2.0/fo/schedule/scan/", data=form)
+        return "success" in response.text.lower() or "updated" in response.text.lower()
+
+    def get_scheduled_scan(self, scan_id: str) -> Dict[str, Any]:
+        """Fetch a single scheduled scan by ID using the v5.0 list endpoint."""
+        response = self._request(
+            "GET", "/api/5.0/fo/schedule/scan/",
+            params={"action": "list", "id": str(scan_id)},
+        )
+        scans = self._parse_scheduled(response.text)
+        return scans[0] if scans else {}
+
+    def get_scan_detail(self, scan_ref: str) -> Dict[str, Any]:
+        """Fetch full details for a running/completed scan."""
+        params = {"action": "list", "scan_ref": scan_ref, "show_status": 1, "show_op": 1}
+        response = self._request("GET", "/api/3.0/fo/scan/", params=params)
+        scans = self._parse_scans(response.text)
+        return scans[0] if scans else {}
+
+    # ------------------------------------------------------------
+    # Metadata fetchers used by the target / option pickers
+    # ------------------------------------------------------------
+
+    def list_asset_groups(self) -> List[Dict[str, str]]:
+        """List asset groups (id + title + IP set)."""
+        response = self._request(
+            "GET", "/api/2.0/fo/asset/group/",
+            params={"action": "list"},
+        )
+        return self._parse_asset_groups(response.text)
+
+    def list_ip_lists(self) -> List[Dict[str, str]]:
+        """
+        List IP search/static lists.
+
+        NOTE: Qualys does not expose a single canonical "IP list" API for the
+        VM module — typically the entries the UI shows as "IP lists" come from
+        the asset-group IP sets. This stub returns [] so the picker still
+        renders; the form falls back to free-text IPs.
+        """
+        return []
+
+    def list_tags(self) -> List[Dict[str, str]]:
+        """
+        List asset tags via the v2 JSON Tag API.
+
+        API: POST /qps/rest/2.0/search/am/tag (JSON body)
+        """
+        try:
+            response = self._request(
+                "POST", "/qps/rest/2.0/search/am/tag",
+                json_body={"ServiceRequest": {}},
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            )
+            import json as _json
+            data = _json.loads(response.text)
+            tags = []
+            for tag in (
+                data.get("ServiceResponse", {}).get("data", []) or []
+            ):
+                t = tag.get("Tag", tag)
+                tags.append({"id": str(t.get("id", "")), "name": t.get("name", "")})
+            return tags
+        except Exception as e:
+            logger.warning(f"list_tags failed (returning empty): {e}")
+            return []
+
+    def _parse_asset_groups(self, xml_text: str) -> List[Dict[str, str]]:
+        groups = []
+        try:
+            root = ET.fromstring(xml_text)
+            for elem in root.findall(".//ASSET_GROUP"):
+                groups.append({
+                    "id": self._xml_text(elem, "ID"),
+                    "title": (
+                        self._xml_text(elem, "TITLE")
+                        or self._xml_text(elem, "NAME")
+                    ),
+                })
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse asset group XML: {e}")
+        return groups
+
+    def _parse_simple_return_items(self, xml_text: str) -> Dict[str, str]:
+        """
+        Parse a Qualys SIMPLE_RETURN ITEM_LIST into a {KEY: VALUE} dict.
+        Used for launch / create responses that return ID + REFERENCE.
+        """
+        items: Dict[str, str] = {}
+        try:
+            root = ET.fromstring(xml_text)
+            for item in root.findall(".//ITEM_LIST/ITEM"):
+                key = (self._xml_text(item, "KEY") or "").lower()
+                val = self._xml_text(item, "VALUE")
+                if key:
+                    items[key] = val
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse SIMPLE_RETURN: {e}")
+        return items
+
     @staticmethod
     def _xml_text(elem: ET.Element, path: str) -> str:
         child = elem.find(path)

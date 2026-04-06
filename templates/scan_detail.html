@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Scan Detail - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🔍 Scan Detail</h1>
+    <div class="header-actions">
+        <a href="/scans" class="btn btn-secondary">← Back to Recent Scans</a>
+    </div>
+</div>
+
+<div id="detail-container">
+    <div class="text-muted text-center" style="padding:2rem">Loading...</div>
+</div>
+
+<!-- Stage Action Modal -->
+<div id="stage-modal" class="modal hidden">
+    <div class="modal-backdrop" onclick="closeModal()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modal-title">Stage Action</h3>
+            <button class="btn btn-icon" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <p id="modal-description"></p>
+            <label for="stage-reason">Reason (optional):</label>
+            <input type="text" id="stage-reason" class="input" placeholder="e.g., Maintenance window">
+            <input type="hidden" id="stage-action">
+        </div>
+        <div class="modal-footer">
+            <button class="btn" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmStage()">Stage Change</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SCAN_REF = {{ scan_ref | tojson }};
+
+document.addEventListener('DOMContentLoaded', loadDetail);
+
+async function loadDetail() {
+    try {
+        const res = await fetch(`/api/scans/${encodeURIComponent(SCAN_REF)}/detail`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        renderDetail(json.data);
+    } catch (e) {
+        // Fall back to list endpoint
+        try {
+            const res2 = await fetch('/api/scans');
+            const json2 = await res2.json();
+            if (json2.success) {
+                const scan = json2.data.find(s => s.ref === SCAN_REF);
+                if (scan) { renderDetail(scan); return; }
+            }
+        } catch (_) {}
+        document.getElementById('detail-container').innerHTML =
+            `<div class="text-danger text-center" style="padding:2rem">Failed to load scan: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function renderDetail(scan) {
+    const status = (scan.status || '').toLowerCase();
+    let actions = '';
+    if (status === 'running') {
+        actions = `
+            <button class="btn btn-warning" onclick="openStageModal('pause')">⏸ Stage Pause</button>
+            <button class="btn btn-danger" onclick="openStageModal('cancel')">⏹ Stage Cancel</button>
+        `;
+    } else if (status === 'paused') {
+        actions = `<button class="btn btn-success" onclick="openStageModal('resume')">▶ Stage Resume</button>`;
+    }
+
+    const tags = (scan.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join(' ');
+
+    document.getElementById('detail-container').innerHTML = `
+        <div class="card" style="margin-bottom:1rem">
+            <div class="card-body">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem">
+                    <div>
+                        <h2 style="margin:0 0 0.25rem">${escapeHtml(scan.title || 'Untitled')}</h2>
+                        <div class="scan-ref">${escapeHtml(scan.ref || SCAN_REF)}</div>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                        <span class="status-badge status-${status}">${scan.status || 'Unknown'}</span>
+                        ${actions}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <table class="table">
+                    <tbody>
+                        <tr><th>Target</th><td>${escapeHtml(scan.target || '—')}</td></tr>
+                        <tr><th>Type</th><td>${escapeHtml(scan.type || scan.scan_type || '—')}</td></tr>
+                        <tr><th>Option Profile</th><td>${escapeHtml(scan.option_profile || '—')}</td></tr>
+                        <tr><th>Scanner</th><td>${escapeHtml(scan.scanner || '—')}</td></tr>
+                        <tr><th>Launched</th><td>${formatDate(scan.launched)}</td></tr>
+                        <tr><th>Duration</th><td>${escapeHtml(scan.duration || '—')}</td></tr>
+                        <tr><th>Tags</th><td>${tags || '—'}</td></tr>
+                        <tr><th>Status</th><td>${escapeHtml(scan.status || '—')}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+function openStageModal(action) {
+    const labels = { pause: 'Pause', resume: 'Resume', cancel: 'Cancel' };
+    document.getElementById('modal-title').textContent = `Stage ${labels[action]}`;
+    document.getElementById('modal-description').textContent = `Stage ${action} for scan ${SCAN_REF}`;
+    document.getElementById('stage-action').value = action;
+    document.getElementById('stage-reason').value = '';
+    document.getElementById('stage-modal').classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('stage-modal').classList.add('hidden');
+}
+
+async function confirmStage() {
+    const action = document.getElementById('stage-action').value;
+    const reason = document.getElementById('stage-reason').value;
+    try {
+        const res = await fetch('/api/stage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, scan_ref: SCAN_REF, reason })
+        });
+        const json = await res.json();
+        if (json.success) {
+            showToast(`Staged: ${action}`, 'success');
+            closeModal();
+            updateStagingBadge();
+        } else {
+            showToast(json.error || 'Failed to stage', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function formatDate(d) {
+    if (!d) return '—';
+    try { return new Date(d).toLocaleString(); } catch { return d; }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

@@ -15,6 +15,7 @@
             <option value="queued">Queued</option>
             <option value="finished">Finished</option>
         </select>
+        <a href="/scans/new" class="btn btn-success">+ Launch Scan</a>
         <button id="refresh-btn" class="btn btn-primary" onclick="refreshScans()">
             🔄 Refresh
         </button>
@@ -125,7 +126,7 @@ function renderScans(scans) {
             <tr data-status="${status}">
                 <td><span class="status-badge status-${status}">${scan.status}</span></td>
                 <td>
-                    <div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div>
+                    <a href="/scans/${encodeURIComponent(scan.ref)}"><div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div></a>
                     <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>
                 </td>
                 <td>${escapeHtml(scan.target || '')}</td>

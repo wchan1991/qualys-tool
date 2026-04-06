@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}
+    {% if mode == 'create_scheduled' %}New Scheduled Scan
+    {% elif mode == 'edit_scheduled' %}Edit Scheduled Scan
+    {% else %}Launch Scan
+    {% endif %} - Qualys Scan Manager
+{% endblock %}
+
+{% block head %}
+<script src="{{ url_for('static', filename='target_picker.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>
+        {% if mode == 'create_scheduled' %}📅 New Scheduled Scan
+        {% elif mode == 'edit_scheduled' %}✏️ Edit Scheduled Scan
+        {% else %}🚀 Launch On-Demand Scan
+        {% endif %}
+    </h1>
+    <div class="header-actions">
+        {% if mode == 'edit_scheduled' %}
+            <a href="/scheduled/{{ scan_id }}" class="btn btn-secondary">← Back to Detail</a>
+        {% elif mode == 'create_scheduled' %}
+            <a href="/scheduled" class="btn btn-secondary">← Back to Scheduled</a>
+        {% else %}
+            <a href="/scans" class="btn btn-secondary">← Back to Recent Scans</a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <form id="scan-form" onsubmit="return false">
+
+            <!-- Title -->
+            <div class="form-group" style="margin-bottom:1rem">
+                <label for="f-title"><strong>Scan Title</strong> <span class="text-danger">*</span></label>
+                <input type="text" id="f-title" class="input" style="width:100%" required
+                    placeholder="e.g. Weekly Internal Network Scan">
+            </div>
+
+            <!-- Target Picker -->
+            <div class="form-group" style="margin-bottom:1rem">
+                <label><strong>Target</strong> <span class="text-danger">*</span></label>
+                <div id="target-picker-mount"></div>
+            </div>
+
+            <!-- Option Profile -->
+            <div class="form-group" style="margin-bottom:1rem">
+                <label for="f-profile"><strong>Option Profile</strong> <span class="text-danger">*</span></label>
+                <select id="f-profile" class="input" style="width:100%" required>
+                    <option value="">Loading option profiles...</option>
+                </select>
+            </div>
+
+            <!-- Scanner -->
+            <div class="form-group" style="margin-bottom:1rem">
+                <label for="f-scanner"><strong>Scanner</strong></label>
+                <select id="f-scanner" class="input" style="width:100%">
+                    <option value="">External (default)</option>
+                </select>
+            </div>
+
+            <!-- Schedule section — only for scheduled scans -->
+            {% if mode != 'launch' %}
+            <fieldset style="border:1px solid var(--border-color, #ddd);border-radius:6px;padding:1rem;margin-bottom:1rem">
+                <legend style="padding:0 0.5rem"><strong>Schedule</strong></legend>
+
+                <div class="form-group" style="margin-bottom:0.75rem">
+                    <label for="f-occurrence"><strong>Frequency</strong></label>
+                    <select id="f-occurrence" class="input" onchange="toggleScheduleFields()" style="width:100%">
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                    </select>
+                </div>
+
+                <div id="daily-fields" class="schedule-fields">
+                    <label for="f-freq-days">Every N days</label>
+                    <input type="number" id="f-freq-days" class="input" value="1" min="1" max="365" style="width:80px">
+                </div>
+
+                <div id="weekly-fields" class="schedule-fields hidden">
+                    <label>Days of week</label>
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.25rem">
+                        {% for day in ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'] %}
+                        <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer">
+                            <input type="checkbox" class="weekday-cb" value="{{ day }}"> {{ day[:3]|title }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <div style="margin-top:0.5rem">
+                        <label for="f-freq-weeks">Every N weeks</label>
+                        <input type="number" id="f-freq-weeks" class="input" value="1" min="1" max="52" style="width:80px">
+                    </div>
+                </div>
+
+                <div id="monthly-fields" class="schedule-fields hidden">
+                    <label for="f-day-of-month">Day of month</label>
+                    <input type="number" id="f-day-of-month" class="input" value="1" min="1" max="31" style="width:80px">
+                </div>
+
+                <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:0.75rem">
+                    <div class="form-group">
+                        <label for="f-start-date">Start Date <span class="text-danger">*</span></label>
+                        <input type="date" id="f-start-date" class="input" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="f-start-hour">Hour (0-23)</label>
+                        <input type="number" id="f-start-hour" class="input" value="2" min="0" max="23" style="width:70px">
+                    </div>
+                    <div class="form-group">
+                        <label for="f-start-minute">Minute</label>
+                        <input type="number" id="f-start-minute" class="input" value="0" min="0" max="59" style="width:70px">
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top:0.5rem">
+                    <label><input type="checkbox" id="f-active" checked> Active immediately</label>
+                </div>
+            </fieldset>
+            {% endif %}
+
+            <!-- Reason -->
+            <div class="form-group" style="margin-bottom:1rem">
+                <label for="f-reason">Reason / Notes (optional)</label>
+                <input type="text" id="f-reason" class="input" style="width:100%"
+                    placeholder="Why is this scan being created?">
+            </div>
+
+            <div class="modal-footer" style="padding:0;margin-top:1rem;border:none">
+                <button type="button" class="btn btn-secondary" onclick="history.back()">Cancel</button>
+                <button type="submit" class="btn btn-primary" onclick="submitForm()">
+                    {% if mode == 'launch' %}🚀 Stage Launch
+                    {% elif mode == 'edit_scheduled' %}📋 Stage Edit
+                    {% else %}📋 Stage New Scan
+                    {% endif %}
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const MODE = {{ mode | tojson }};
+const SCAN_ID = {{ (scan_id if scan_id is defined else '') | tojson }};
+
+let targetPicker = null;
+let sources = {};
+let currentScan = null;
+
+document.addEventListener('DOMContentLoaded', init);
+
+async function init() {
+    // Set default start date to tomorrow
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const f = document.getElementById('f-start-date');
+    if (f) f.value = tomorrow.toISOString().slice(0, 10);
+
+    // Load target sources
+    try {
+        const res = await fetch('/api/target-sources');
+        const json = await res.json();
+        if (json.success) sources = json.data;
+    } catch (_) {}
+
+    // Populate option profiles
+    const profileSel = document.getElementById('f-profile');
+    if (sources.option_profiles && sources.option_profiles.length) {
+        profileSel.innerHTML = '<option value="">Select option profile...</option>' +
+            sources.option_profiles.map(p => `<option value="${esc(p.id || p.title)}">${esc(p.title || p.id)}</option>`).join('');
+    } else {
+        profileSel.innerHTML = '<option value="">No profiles loaded — enter ID manually</option>';
+        profileSel.insertAdjacentHTML('afterend', '<input type="text" id="f-profile-manual" class="input" style="width:100%;margin-top:0.3rem" placeholder="Option profile title or ID">');
+    }
+
+    // Populate scanners
+    const scannerSel = document.getElementById('f-scanner');
+    if (sources.scanners && sources.scanners.length) {
+        scannerSel.innerHTML = '<option value="">External (default)</option>' +
+            sources.scanners.map(s => `<option value="${esc(s.name || s.id)}">${esc(s.name || s.id)}</option>`).join('');
+    }
+
+    // Load current scan data for edit mode
+    let initial = {};
+    if (MODE === 'edit_scheduled' && SCAN_ID) {
+        try {
+            const res = await fetch(`/api/scheduled/${encodeURIComponent(SCAN_ID)}/detail`);
+            const json = await res.json();
+            if (json.success) {
+                currentScan = json.data;
+                prefillForm(json.data);
+                initial = { type: 'ip', value: json.data.target || '' };
+            }
+        } catch (_) {
+            try {
+                const res2 = await fetch('/api/scheduled');
+                const json2 = await res2.json();
+                if (json2.success) {
+                    currentScan = json2.data.find(s => String(s.scan_id || s.id) === String(SCAN_ID));
+                    if (currentScan) {
+                        prefillForm(currentScan);
+                        initial = { type: 'ip', value: currentScan.target || '' };
+                    }
+                }
+            } catch (_) {}
+        }
+    }
+
+    // Mount target picker
+    targetPicker = new TargetPicker(document.getElementById('target-picker-mount'), sources, initial);
+}
+
+function prefillForm(scan) {
+    const t = (id) => document.getElementById(id);
+    if (t('f-title')) t('f-title').value = scan.title || '';
+    // Option profile
+    const profileSel = t('f-profile');
+    if (profileSel && scan.option_profile) {
+        for (const opt of profileSel.options) {
+            if (opt.text === scan.option_profile || opt.value === scan.option_profile) {
+                opt.selected = true; break;
+            }
+        }
+    }
+    // Scanner
+    const scannerSel = t('f-scanner');
+    if (scannerSel && (scan.scanner || scan.iscanner_name)) {
+        const scannerVal = scan.scanner || scan.iscanner_name;
+        for (const opt of scannerSel.options) {
+            if (opt.value === scannerVal || opt.text === scannerVal) {
+                opt.selected = true; break;
+            }
+        }
+    }
+    if (t('f-active') && scan.active !== undefined) t('f-active').checked = scan.active;
+}
+
+function toggleScheduleFields() {
+    const occ = document.getElementById('f-occurrence').value;
+    document.querySelectorAll('.schedule-fields').forEach(el => el.classList.add('hidden'));
+    const show = document.getElementById(occ + '-fields');
+    if (show) show.classList.remove('hidden');
+}
+
+function buildPayload() {
+    const title = document.getElementById('f-title').value.trim();
+    if (!title) { showToast('Title is required', 'error'); return null; }
+
+    const target = targetPicker ? targetPicker.getValue() : null;
+    if (!target) { showToast('Target is required', 'error'); return null; }
+
+    const profileSel = document.getElementById('f-profile');
+    const profileManual = document.getElementById('f-profile-manual');
+    const optionProfile = (profileSel && profileSel.value) || (profileManual && profileManual.value.trim()) || '';
+    if (!optionProfile) { showToast('Option profile is required', 'error'); return null; }
+
+    const scannerSel = document.getElementById('f-scanner');
+    const scanner = scannerSel ? scannerSel.value : '';
+
+    const payload = { title, target, option_profile: optionProfile };
+    if (scanner) payload.scanner = scanner;
+
+    if (MODE !== 'launch') {
+        const occ = document.getElementById('f-occurrence').value;
+        const startDate = document.getElementById('f-start-date').value;
+        if (!startDate) { showToast('Start date is required', 'error'); return null; }
+        const startHour = parseInt(document.getElementById('f-start-hour').value || '2', 10);
+        const startMinute = parseInt(document.getElementById('f-start-minute').value || '0', 10);
+        const active = document.getElementById('f-active').checked;
+
+        const schedule = { occurrence: occ, start_date: startDate, start_hour: startHour, start_minute: startMinute };
+
+        if (occ === 'daily') {
+            schedule.frequency_days = parseInt(document.getElementById('f-freq-days').value || '1', 10);
+        } else if (occ === 'weekly') {
+            const weekdays = Array.from(document.querySelectorAll('.weekday-cb:checked')).map(cb => cb.value);
+            schedule.weekdays = weekdays.join(',');
+            schedule.frequency_weeks = parseInt(document.getElementById('f-freq-weeks').value || '1', 10);
+        } else if (occ === 'monthly') {
+            schedule.day_of_month = parseInt(document.getElementById('f-day-of-month').value || '1', 10);
+        }
+
+        payload.schedule = schedule;
+        payload.active = active;
+    }
+
+    return payload;
+}
+
+async function submitForm() {
+    const reason = document.getElementById('f-reason').value.trim();
+    const payload = buildPayload();
+    if (!payload) return;
+
+    let body;
+    if (MODE === 'launch') {
+        body = { action: 'launch', scan_ref: '__launch__', payload, reason };
+    } else if (MODE === 'edit_scheduled') {
+        const current = currentScan || {};
+        const changes = { title: payload.title, target: payload.target, option_profile: payload.option_profile };
+        if (payload.scanner) changes.scanner = payload.scanner;
+        if (payload.schedule) changes.schedule = payload.schedule;
+        body = { action: 'modify_scheduled', scan_ref: SCAN_ID, current, changes, reason };
+    } else {
+        body = { action: 'create_scheduled', scan_ref: '__new__', payload, reason };
+    }
+
+    try {
+        const res = await fetch('/api/stage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (json.success) {
+            showToast('Staged successfully! Review in Staging.', 'success');
+            updateStagingBadge();
+            setTimeout(() => { window.location.href = '/staging'; }, 1200);
+        } else {
+            showToast(json.error || 'Failed to stage', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function esc(text) {
+    if (text == null) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

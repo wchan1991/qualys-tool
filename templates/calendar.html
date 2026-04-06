@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Calendar - Qualys Scan Manager{% endblock %}
+
+{% block head %}
+<link href='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.css' rel='stylesheet' />
+<script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
+<style>
+    #calendar-wrap { background: var(--card-bg, #fff); border-radius: 8px; padding: 1rem; }
+    .fc-event { cursor: pointer; }
+    .tab-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .tab-bar .tab-btn { padding: 0.4rem 1rem; border-radius: 4px; border: 1px solid var(--border-color, #ddd);
+        background: transparent; cursor: pointer; font-size: 0.9rem; }
+    .tab-bar .tab-btn.active { background: var(--primary, #0d6efd); color: #fff; border-color: var(--primary, #0d6efd); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🗓️ Scan Calendar</h1>
+</div>
+
+<div class="tab-bar">
+    <button class="tab-btn active" id="tab-scheduled" onclick="switchTab('scheduled')">📅 Scheduled Scans</button>
+    <button class="tab-btn" id="tab-ondemand" onclick="switchTab('ondemand')">🔍 On-Demand History</button>
+</div>
+
+<div id="calendar-wrap">
+    <div id="calendar"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let calendar = null;
+let activeTab = 'scheduled';
+
+document.addEventListener('DOMContentLoaded', initCalendar);
+
+function initCalendar() {
+    const el = document.getElementById('calendar');
+    calendar = new FullCalendar.Calendar(el, {
+        initialView: 'dayGridMonth',
+        headerToolbar: {
+            left: 'prev,next today',
+            center: 'title',
+            right: 'dayGridMonth,timeGridWeek'
+        },
+        events: fetchEvents,
+        eventClick: function(info) {
+            if (info.event.url) {
+                info.jsEvent.preventDefault();
+                window.location.href = info.event.url;
+            }
+        },
+        eventDidMount: function(info) {
+            const props = info.event.extendedProps;
+            const lines = [];
+            if (props.target) lines.push('Target: ' + props.target);
+            if (props.status) lines.push('Status: ' + props.status);
+            if (props.ref) lines.push('Ref: ' + props.ref);
+            if (props.scan_id) lines.push('ID: ' + props.scan_id);
+            if (lines.length) info.el.title = lines.join('\n');
+        },
+        height: 'auto',
+        loading: function(isLoading) {
+            // Could show/hide a spinner here
+        }
+    });
+    calendar.render();
+}
+
+function fetchEvents(fetchInfo, successCallback, failureCallback) {
+    const start = fetchInfo.startStr;
+    const end = fetchInfo.endStr;
+    fetch(`/api/calendar?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&type=${activeTab}`)
+        .then(r => r.json())
+        .then(json => {
+            if (json.success) {
+                successCallback(json.data);
+            } else {
+                failureCallback({ message: json.error || 'Failed to load events' });
+            }
+        })
+        .catch(e => failureCallback({ message: e.message }));
+}
+
+function switchTab(tab) {
+    activeTab = tab;
+    document.getElementById('tab-scheduled').classList.toggle('active', tab === 'scheduled');
+    document.getElementById('tab-ondemand').classList.toggle('active', tab === 'ondemand');
+    if (calendar) calendar.refetchEvents();
+}
+</script>
+{% endblock %}
