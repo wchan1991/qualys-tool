@@ -2,6 +2,10 @@
 
 {% block title %}Tags - Qualys Scan Manager{% endblock %}
 
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <h1>🏷️ Tag Report</h1>
@@ -10,27 +14,41 @@
     </div>
 </div>
 
-<div class="card">
+<!-- Top Tags Chart (Feature 11) -->
+<div class="card" style="margin-bottom:1.5rem">
+    <div class="card-header">
+        <h2>🏆 Top Tags by Scan Count</h2>
+    </div>
     <div class="card-body">
-        <table class="table" id="tags-table">
-            <thead>
-                <tr>
-                    <th>Tag</th>
-                    <th>Scan Count</th>
-                    <th>Example Scans</th>
-                </tr>
-            </thead>
-            <tbody id="tags-tbody">
-                <tr>
-                    <td colspan="3" class="text-muted text-center">Loading...</td>
-                </tr>
-            </tbody>
-        </table>
+        <canvas id="top-tags-chart" height="120"></canvas>
+        <div id="top-tags-empty" class="hidden text-muted text-center" style="padding:1rem">
+            No tag data yet. Refresh scans first.
+        </div>
     </div>
 </div>
 
-<div class="alert alert-info">
-    <strong>💡 Tip:</strong> Tags are extracted from scans when you refresh. 
+<!-- Full tag table -->
+<div class="card">
+    <div class="card-body">
+        <div class="table-scroll-wrap">
+            <table class="table" id="tags-table">
+                <thead>
+                    <tr>
+                        <th>Tag</th>
+                        <th>Scan Count</th>
+                        <th>Example Scans</th>
+                    </tr>
+                </thead>
+                <tbody id="tags-tbody">
+                    <tr><td colspan="3" class="text-muted text-center">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="alert alert-info" style="margin-top:1rem">
+    <strong>💡 Tip:</strong> Tags are extracted from scans when you refresh.
     If you don't see tags, go to Dashboard and click "Refresh from Qualys".
 </div>
 {% endblock %}
@@ -38,24 +56,64 @@
 {% block scripts %}
 <script>
 let allTags = [];
+let _topChart = null;
 
-document.addEventListener('DOMContentLoaded', loadTags);
+document.addEventListener('DOMContentLoaded', () => {
+    loadTags();
+    loadTopTags();
+});
+
+async function loadTopTags() {
+    try {
+        const res = await fetch('/api/tags/top?limit=10');
+        const json = await res.json();
+        if (!json.success || !json.data.length) {
+            document.getElementById('top-tags-empty').classList.remove('hidden');
+            return;
+        }
+        const data = json.data;
+        const labels = data.map(d => d.tag);
+        const counts = data.map(d => d.count);
+        const ctx = document.getElementById('top-tags-chart').getContext('2d');
+        if (_topChart) _topChart.destroy();
+        _topChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Scans',
+                    data: counts,
+                    backgroundColor: 'rgba(59,130,246,0.7)',
+                    borderColor: '#3b82f6',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } }
+                }
+            }
+        });
+    } catch (e) {
+        console.error('Failed to load top tags chart:', e);
+    }
+}
 
 async function loadTags() {
     try {
         const res = await fetch('/api/tags');
         const json = await res.json();
-        
         const tbody = document.getElementById('tags-tbody');
-        
         if (!json.success || !json.data.length) {
             tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center">No tags found. Refresh scans to populate tags.</td></tr>';
             return;
         }
-        
         allTags = json.data;
         renderTags(allTags);
-        
     } catch (e) {
         console.error('Failed to load tags:', e);
     }
@@ -63,17 +121,14 @@ async function loadTags() {
 
 function renderTags(tags) {
     const tbody = document.getElementById('tags-tbody');
-    
     if (!tags.length) {
         tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center">No matching tags</td></tr>';
         return;
     }
-    
     tbody.innerHTML = tags.map(tag => {
-        const examples = (tag.example_scans || []).slice(0, 3).map(ref => 
+        const examples = (tag.example_scans || []).slice(0, 3).map(ref =>
             `<span class="scan-ref">${escapeHtml(ref)}</span>`
         ).join(', ');
-        
         return `
             <tr>
                 <td><span class="tag tag-lg">${escapeHtml(tag.tag)}</span></td>
@@ -86,12 +141,7 @@ function renderTags(tags) {
 
 function filterTags() {
     const search = document.getElementById('tag-search').value.toLowerCase();
-    
-    const filtered = allTags.filter(tag => 
-        tag.tag.toLowerCase().includes(search)
-    );
-    
-    renderTags(filtered);
+    renderTags(allTags.filter(tag => tag.tag.toLowerCase().includes(search)));
 }
 </script>
 {% endblock %}

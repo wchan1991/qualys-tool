@@ -36,6 +36,9 @@
             <a href="{{ url_for('lookup_page') }}" class="nav-link {% if request.endpoint == 'lookup_page' %}active{% endif %}">
                 🔎 Lookup
             </a>
+            <a href="{{ url_for('scanners_page') }}" class="nav-link {% if request.endpoint == 'scanners_page' %}active{% endif %}">
+                🖥️ Scanners
+            </a>
         </div>
         <div class="nav-actions">
             <button id="theme-toggle" class="btn btn-icon" title="Toggle theme">🌙</button>

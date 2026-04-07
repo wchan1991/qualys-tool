@@ -703,11 +703,9 @@ class ScanManager:
         inactive_scheduled = len(scheduled) - active_scheduled
         
         return {
-            # Running scans
+            # Recent/running scans — Running and Queued removed per Feature 7
             "total_scans": len(scans),
-            "running": status_counts.get("Running", 0),
             "paused": status_counts.get("Paused", 0),
-            "queued": status_counts.get("Queued", 0),
             "finished": status_counts.get("Finished", 0),
             "failed": status_counts.get("Error", 0),
             # Scheduled scans

@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Scanners - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🖥️ Scanner Appliances</h1>
+    <div class="header-actions">
+        <button class="btn btn-primary" onclick="loadScanners()">🔄 Refresh</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-scroll-wrap">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Scanner Name</th>
+                        <th>Status</th>
+                        <th>Type</th>
+                        <th>Version</th>
+                        <th>Scheduled Scans</th>
+                        <th>Associated Scans</th>
+                    </tr>
+                </thead>
+                <tbody id="scanners-tbody">
+                    <tr><td colspan="6" class="text-muted text-center">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', loadScanners);
+
+async function loadScanners() {
+    document.getElementById('scanners-tbody').innerHTML =
+        '<tr><td colspan="6" class="text-muted text-center">Loading…</td></tr>';
+
+    try {
+        const [scannersRes, scheduledRes] = await Promise.all([
+            fetch('/api/scanners').then(r => r.json()),
+            fetch('/api/scheduled').then(r => r.json()),
+        ]);
+
+        const scanners = (scannersRes.success ? scannersRes.data : []) || [];
+        const scheduled = (scheduledRes.success ? scheduledRes.data : []) || [];
+
+        // Group scheduled scans by scanner name (case-insensitive)
+        const byScanner = {};
+        for (const scan of scheduled) {
+            const key = (scan.scanner || '').trim().toLowerCase();
+            if (!byScanner[key]) byScanner[key] = [];
+            byScanner[key].push(scan);
+        }
+
+        const tbody = document.getElementById('scanners-tbody');
+
+        if (!scanners.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">No scanners found. Refresh from Qualys first.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = scanners.map(s => {
+            const name = s.name || s.id || '—';
+            const key = name.trim().toLowerCase();
+            const associated = byScanner[key] || [];
+            const statusClass = (s.status || '').toLowerCase() === 'active' ? 'status-running' : 'status-paused';
+            const scanItems = associated.map(sc =>
+                `<li style="padding:2px 0"><a href="/scheduled/${encodeURIComponent(sc.id || sc.scan_id)}">${esc(sc.title || sc.id || sc.scan_id)}</a></li>`
+            ).join('');
+
+            return `
+                <tr>
+                    <td><strong>${esc(name)}</strong><br><small class="text-muted">${esc(s.id || '')}</small></td>
+                    <td><span class="status-badge ${statusClass}">${esc(s.status || '—')}</span></td>
+                    <td>${esc(s.type || s.scanner_type || '—')}</td>
+                    <td>${esc(s.software_version || s.version || '—')}</td>
+                    <td><span class="count-badge">${associated.length}</span></td>
+                    <td>
+                        ${associated.length
+                            ? `<details><summary style="cursor:pointer">${associated.length} scan(s)</summary>
+                                <ul style="margin:4px 0 0 16px;padding:0;list-style:disc">${scanItems}</ul>
+                               </details>`
+                            : '<span class="text-muted">None</span>'}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+    } catch (e) {
+        document.getElementById('scanners-tbody').innerHTML =
+            `<tr><td colspan="6" class="text-danger text-center">Failed to load: ${esc(e.message)}</td></tr>`;
+    }
+}
+
+function esc(text) {
+    if (text == null) return '';
+    const d = document.createElement('div');
+    d.textContent = String(text);
+    return d.innerHTML;
+}
+</script>
+{% endblock %}

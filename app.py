@@ -10,12 +10,14 @@ Thread-safety: The ScanDatabase class uses thread-local storage for SQLite
 connections, making it safe to use with Flask's threaded mode.
 """
 
+import shutil
 import sys
 import logging
+from datetime import datetime
 from pathlib import Path
 from functools import wraps
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, redirect, url_for
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -62,7 +64,7 @@ def get_config():
 def get_manager() -> ScanManager:
     """
     Get or create the scan manager.
-    
+
     The manager is a singleton, but the underlying database uses thread-local
     connections to ensure thread safety with Flask's threaded mode.
     """
@@ -70,6 +72,43 @@ def get_manager() -> ScanManager:
     if _manager is None:
         _manager = ScanManager(get_config())
     return _manager
+
+
+# ============================================================
+# STARTUP — backup + clear on every launch (Feature 1)
+# ============================================================
+
+_startup_done = False
+
+
+def _perform_startup_backup() -> None:
+    """Copy the live DB to data/backups/ before clearing it."""
+    try:
+        db_path = Path(get_config().db_path)
+        if not db_path.exists() or db_path.stat().st_size == 0:
+            return
+        backup_dir = db_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = backup_dir / f"qualys_scans_{stamp}.db"
+        shutil.copy2(db_path, dest)
+        logger.info(f"Startup backup created: {dest}")
+    except Exception as e:
+        logger.warning(f"Could not create startup backup: {e}")
+
+
+@app.before_request
+def run_startup():
+    """Back up then clear scan data on first request after each app launch."""
+    global _startup_done
+    if not _startup_done:
+        _startup_done = True
+        _perform_startup_backup()
+        try:
+            get_manager().db.clear_scan_data()
+            logger.info("Scan data cleared for fresh session")
+        except Exception as e:
+            logger.warning(f"Could not clear scan data on startup: {e}")
 
 
 def api_response(f):
@@ -94,14 +133,21 @@ def api_response(f):
 
 @app.route("/")
 def index():
-    """Main dashboard page."""
+    """Main dashboard page — redirect to /init when DB is empty."""
     config = get_config()
-    
+    if get_manager().db.is_empty():
+        return redirect(url_for("init_page"))
     return render_template(
         "index.html",
         configured=config.is_configured(),
         api_url=config.api_url,
     )
+
+
+@app.route("/init")
+def init_page():
+    """Initialization / data-loading page."""
+    return render_template("init.html")
 
 
 @app.route("/scans")
@@ -168,6 +214,12 @@ def lookup_page():
 def calendar_page():
     """Calendar view."""
     return render_template("calendar.html")
+
+
+@app.route("/scanners")
+def scanners_page():
+    """Scanner appliances page."""
+    return render_template("scanners.html")
 
 
 # ============================================================
@@ -445,6 +497,50 @@ def api_refresh_all():
 
 
 # ============================================================
+# BULK STAGING (Feature 10)
+# ============================================================
+
+@app.route("/api/stage/bulk", methods=["POST"])
+@api_response
+def api_stage_bulk():
+    """Stage multiple actions in one request."""
+    data = request.json or {}
+    changes = data.get("changes", [])
+    if not changes:
+        raise ValueError("changes list is required")
+
+    manager = get_manager()
+    staged = 0
+    failed = []
+
+    for item in changes:
+        action = item.get("action", "")
+        scan_ref = item.get("scan_ref", "")
+        reason = item.get("reason", "")
+        title = item.get("title", "")
+        try:
+            if action == "pause":
+                manager.stage_pause(scan_ref, reason)
+            elif action == "resume":
+                manager.stage_resume(scan_ref, reason)
+            elif action == "cancel":
+                manager.stage_cancel(scan_ref, reason)
+            elif action == "activate":
+                manager.stage_activate(scan_ref, title, reason)
+            elif action == "deactivate":
+                manager.stage_deactivate(scan_ref, title, reason)
+            elif action == "delete":
+                manager.stage_delete_scheduled(scan_ref, title, reason)
+            else:
+                raise ValueError(f"Unknown action: {action}")
+            staged += 1
+        except Exception as e:
+            failed.append({"scan_ref": scan_ref, "action": action, "error": str(e)})
+
+    return {"staged": staged, "failed": failed}
+
+
+# ============================================================
 # DETAIL API ROUTES
 # ============================================================
 
@@ -507,6 +603,78 @@ def api_calendar():
         raise ValueError("start and end query parameters are required")
     manager = get_manager()
     return manager.get_calendar_events(start, end, event_type)
+
+
+# ============================================================
+# BACKUP MANAGEMENT (Feature 1)
+# ============================================================
+
+@app.route("/api/backups")
+@api_response
+def api_list_backups():
+    """List available DB backups."""
+    db_path = Path(get_config().db_path)
+    backup_dir = db_path.parent / "backups"
+    if not backup_dir.exists():
+        return []
+    files = sorted(backup_dir.glob("qualys_scans_*.db"), reverse=True)
+    return [
+        {
+            "filename": f.name,
+            "size_bytes": f.stat().st_size,
+            "created": datetime.fromtimestamp(f.stat().st_mtime).astimezone().isoformat(),
+        }
+        for f in files
+    ]
+
+
+@app.route("/api/backups/restore/<filename>", methods=["POST"])
+@api_response
+def api_restore_backup(filename):
+    """Restore a named backup over the live DB."""
+    global _manager
+    # Validate filename — no path separators or traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise ValueError("Invalid filename")
+    db_path = Path(get_config().db_path)
+    src = db_path.parent / "backups" / filename
+    if not src.exists():
+        raise FileNotFoundError(f"Backup not found: {filename}")
+    # Close existing connections before overwriting
+    if _manager is not None:
+        try:
+            _manager.db.close()
+        except Exception:
+            pass
+        _manager = None
+    shutil.copy2(src, db_path)
+    logger.info(f"Restored backup: {filename}")
+    return {"restored": filename}
+
+
+# ============================================================
+# DASHBOARD TRAFFIC CHART (Feature 6)
+# ============================================================
+
+@app.route("/api/dashboard/traffic")
+@api_response
+def api_dashboard_traffic():
+    """Get 24-hour scan launch traffic for the dashboard chart."""
+    manager = get_manager()
+    return manager.db.get_scan_traffic_24h()
+
+
+# ============================================================
+# TOP TAGS (Feature 11)
+# ============================================================
+
+@app.route("/api/tags/top")
+@api_response
+def api_tags_top():
+    """Get top tags by scan count."""
+    limit = int(request.args.get("limit", 10))
+    manager = get_manager()
+    return manager.db.get_top_tags(limit)
 
 
 # ============================================================

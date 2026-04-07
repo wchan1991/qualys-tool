@@ -4,24 +4,26 @@
 {% block content %}
 <div class="page-header">
     <h1>🔎 Target Lookup</h1>
-    <p class="page-description">Find all scans that use a given IP, asset group, or tag</p>
+    <p class="page-description">Find all scans that use a given IP, CIDR, asset group, tag, option profile, or scanner</p>
 </div>
 
 <div class="card" style="margin-bottom:1rem">
     <div class="card-body">
         <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">
             <div>
-                <label for="lookup-type"><strong>Target Type</strong></label><br>
-                <select id="lookup-type" class="input" style="min-width:140px" onchange="onTypeChange()">
+                <label for="lookup-type"><strong>Search By</strong></label><br>
+                <select id="lookup-type" class="input" style="min-width:160px" onchange="onTypeChange()">
                     <option value="ip">IP / CIDR</option>
                     <option value="asset_group">Asset Group</option>
                     <option value="tag">Tag</option>
+                    <option value="option_profile">Option Profile</option>
+                    <option value="scanner">Scanner</option>
                 </select>
             </div>
             <div style="flex:1;min-width:220px">
                 <label for="lookup-value"><strong>Value</strong></label><br>
                 <input type="text" id="lookup-value" class="input" style="width:100%"
-                    placeholder="e.g. 10.0.0.1 or 192.168.0.0/24"
+                    placeholder="e.g. 10.0.0.1 or 10.0.0.0/16"
                     onkeydown="if(event.key==='Enter') doLookup()">
             </div>
             <div>
@@ -29,8 +31,10 @@
             </div>
         </div>
         <div id="lookup-hint" class="text-muted" style="font-size:0.8rem;margin-top:0.4rem">
-            For IP/CIDR: enter a single address or range. Scans whose target overlaps will be returned.
+            Enter an IP address or CIDR range (e.g. 10.0.0.0/16). Overlapping ranges are detected.
         </div>
+        <!-- Clickable chips (Feature 12) -->
+        <div id="lookup-chips" style="margin-top:0.6rem;display:flex;flex-wrap:wrap;gap:0.4rem;min-height:1.5rem"></div>
     </div>
 </div>
 
@@ -38,20 +42,24 @@
     <h3>Scheduled Scans <span id="sched-count" class="badge">0</span></h3>
     <div class="card" style="margin-bottom:1rem">
         <div class="card-body">
-            <table class="table">
-                <thead><tr><th>Title</th><th>Target</th><th>Status</th><th></th></tr></thead>
-                <tbody id="sched-tbody"></tbody>
-            </table>
+            <div class="table-scroll-wrap">
+                <table class="table">
+                    <thead><tr><th>Title</th><th>Target</th><th>Status</th><th>Matched</th><th></th></tr></thead>
+                    <tbody id="sched-tbody"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 
     <h3>Recent Scans <span id="recent-count" class="badge">0</span></h3>
     <div class="card">
         <div class="card-body">
-            <table class="table">
-                <thead><tr><th>Title</th><th>Target</th><th>Status</th><th>Launched</th><th></th></tr></thead>
-                <tbody id="recent-tbody"></tbody>
-            </table>
+            <div class="table-scroll-wrap">
+                <table class="table">
+                    <thead><tr><th>Title</th><th>Target</th><th>Status</th><th>Matched</th><th></th></tr></thead>
+                    <tbody id="recent-tbody"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
@@ -63,17 +71,77 @@
 
 {% block scripts %}
 <script>
+let _sources = null;
+let _activeChip = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadSources();
+});
+
+async function loadSources() {
+    try {
+        const res = await fetch('/api/target-sources');
+        const json = await res.json();
+        if (json.success) {
+            _sources = json.data;
+            onTypeChange(); // render chips for current type
+        }
+    } catch (_) {}
+}
+
 function onTypeChange() {
     const type = document.getElementById('lookup-type').value;
     const hints = {
-        ip: 'For IP/CIDR: enter a single address or range. Scans whose target overlaps will be returned.',
+        ip: 'Enter an IP address or CIDR range (e.g. 10.0.0.0/16). Overlapping ranges are detected.',
         asset_group: 'Enter the exact asset group name.',
         tag: 'Enter the exact tag name.',
+        option_profile: 'Enter part of an option profile name. Case-insensitive.',
+        scanner: 'Enter part of a scanner name. Case-insensitive. Only matches scheduled scans.',
+    };
+    const placeholders = {
+        ip: 'e.g. 10.0.0.1 or 10.0.0.0/16',
+        asset_group: 'e.g. Server Farm',
+        tag: 'e.g. Production',
+        option_profile: 'e.g. Full Scan',
+        scanner: 'e.g. Internal Scanner',
     };
     document.getElementById('lookup-hint').textContent = hints[type] || '';
-    document.getElementById('lookup-value').placeholder =
-        type === 'ip' ? 'e.g. 10.0.0.1 or 192.168.0.0/24' :
-        type === 'asset_group' ? 'e.g. Server Farm' : 'e.g. Production';
+    document.getElementById('lookup-value').placeholder = placeholders[type] || '';
+    _activeChip = null;
+    renderChips(type);
+}
+
+function renderChips(type) {
+    const container = document.getElementById('lookup-chips');
+    container.innerHTML = '';
+
+    if (!_sources || type === 'ip') return;
+
+    let items = [];
+    if (type === 'asset_group') {
+        items = (_sources.asset_groups || []).map(g => g.title || g.name || g.id);
+    } else if (type === 'tag') {
+        items = (_sources.tags || []).map(t => t.name || t.id);
+    } else if (type === 'option_profile') {
+        items = (_sources.option_profiles || []).map(p => p.title || p.id);
+    } else if (type === 'scanner') {
+        items = (_sources.scanners || []).map(s => s.name || s.id);
+    }
+
+    items.filter(Boolean).forEach(name => {
+        const btn = document.createElement('button');
+        btn.className = 'chip';
+        btn.textContent = name;
+        btn.onclick = () => {
+            document.getElementById('lookup-value').value = name;
+            // Mark active chip
+            container.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            _activeChip = name;
+            doLookup();
+        };
+        container.appendChild(btn);
+    });
 }
 
 async function doLookup() {
@@ -105,9 +173,10 @@ async function doLookup() {
                     <td><a href="/scheduled/${encodeURIComponent(s.scan_id || s.id)}">${esc(s.title || '—')}</a></td>
                     <td>${esc(s.target || '—')}</td>
                     <td><span class="status-badge ${s.active ? 'status-active' : 'status-inactive'}">${s.active ? 'Active' : 'Inactive'}</span></td>
+                    <td><small class="text-muted">${esc(s.matched_target || '—')}</small></td>
                     <td><a href="/scheduled/${encodeURIComponent(s.scan_id || s.id)}" class="btn btn-sm">Details</a></td>
                 </tr>`).join('')
-            : '<tr><td colspan="4" class="text-muted text-center">None</td></tr>';
+            : '<tr><td colspan="5" class="text-muted text-center">None</td></tr>';
 
         document.getElementById('recent-tbody').innerHTML = recent.length
             ? recent.map(s => `
@@ -115,7 +184,7 @@ async function doLookup() {
                     <td><a href="/scans/${encodeURIComponent(s.ref)}">${esc(s.title || '—')}</a></td>
                     <td>${esc(s.target || '—')}</td>
                     <td><span class="status-badge status-${(s.status||'').toLowerCase()}">${esc(s.status || '—')}</span></td>
-                    <td>${formatDate(s.launched)}</td>
+                    <td><small class="text-muted">${esc(s.matched_target || '—')}</small></td>
                     <td><a href="/scans/${encodeURIComponent(s.ref)}" class="btn btn-sm">Details</a></td>
                 </tr>`).join('')
             : '<tr><td colspan="5" class="text-muted text-center">None</td></tr>';
@@ -128,7 +197,16 @@ async function doLookup() {
 
 function formatDate(d) {
     if (!d) return '—';
-    try { return new Date(d).toLocaleString(); } catch { return d; }
+    try {
+        let s = String(d).trim();
+        if (/^\d{4}\/\d{2}\/\d{2}/.test(s)) {
+            s = s.replace(/\//g, '-');
+            if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+        }
+        const dt = new Date(s);
+        if (isNaN(dt.getTime())) return d;
+        return dt.toLocaleString(undefined, { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+    } catch { return d; }
 }
 
 function esc(text) {

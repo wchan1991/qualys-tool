@@ -22,26 +22,38 @@
     </div>
 </div>
 
+<!-- Bulk action bar (hidden until rows selected) -->
+<div id="bulk-bar" class="bulk-bar hidden">
+    <span class="bulk-count" id="bulk-count">0 selected</span>
+    <button class="btn btn-sm btn-warning" onclick="bulkAction('pause')">⏸ Pause</button>
+    <button class="btn btn-sm btn-success" onclick="bulkAction('resume')">▶ Resume</button>
+    <button class="btn btn-sm btn-danger" onclick="bulkAction('cancel')">⏹ Cancel</button>
+    <button class="btn btn-sm btn-secondary" onclick="clearSelection()">✕ Clear</button>
+</div>
+
 <div class="card">
     <div class="card-body">
-        <table class="table" id="scans-table">
-            <thead>
-                <tr>
-                    <th>Status</th>
-                    <th>Title</th>
-                    <th>Target</th>
-                    <th>Type</th>
-                    <th>Tags</th>
-                    <th>Launched</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="scans-tbody">
-                <tr>
-                    <td colspan="7" class="text-muted text-center">Loading...</td>
-                </tr>
-            </tbody>
-        </table>
+        <div class="table-scroll-wrap">
+            <table class="table" id="scans-table">
+                <thead>
+                    <tr>
+                        <th style="width:36px"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
+                        <th>Status</th>
+                        <th>Title</th>
+                        <th>Target</th>
+                        <th>Type</th>
+                        <th>Tags</th>
+                        <th>Launched</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="scans-tbody">
+                    <tr>
+                        <td colspan="8" class="text-muted text-center">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
@@ -106,10 +118,10 @@ function renderScans(scans) {
     
     tbody.innerHTML = scans.map(scan => {
         const status = scan.status?.toLowerCase() || 'unknown';
-        const tags = (scan.tags || []).slice(0, 3).map(t => 
+        const tags = (scan.tags || []).slice(0, 3).map(t =>
             `<span class="tag">${escapeHtml(t)}</span>`
         ).join('');
-        
+
         let actions = '';
         if (status === 'running') {
             actions = `
@@ -121,10 +133,11 @@ function renderScans(scans) {
                 <button class="btn btn-sm btn-success" onclick="openStageModal('resume', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Resume</button>
             `;
         }
-        
+
         return `
             <tr data-status="${status}">
-                <td><span class="status-badge status-${status}">${scan.status}</span></td>
+                <td><input type="checkbox" class="row-cb" data-ref="${escapeHtml(scan.ref)}" data-status="${status}" onchange="onCheckboxChange()"></td>
+                <td><span class="status-badge status-${status}">${escapeHtml(scan.status)}</span></td>
                 <td>
                     <a href="/scans/${encodeURIComponent(scan.ref)}"><div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div></a>
                     <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>
@@ -142,20 +155,76 @@ function renderScans(scans) {
 function filterScans() {
     const search = document.getElementById('search-input').value.toLowerCase();
     const statusFilter = document.getElementById('status-filter').value.toLowerCase();
-    
+
     const filtered = allScans.filter(scan => {
-        const matchesSearch = !search || 
+        const matchesSearch = !search ||
             (scan.title || '').toLowerCase().includes(search) ||
             (scan.ref || '').toLowerCase().includes(search) ||
             (scan.target || '').toLowerCase().includes(search);
-        
-        const matchesStatus = !statusFilter || 
+
+        const matchesStatus = !statusFilter ||
             (scan.status || '').toLowerCase() === statusFilter;
-        
+
         return matchesSearch && matchesStatus;
     });
-    
+
+    clearSelection();
     renderScans(filtered);
+}
+
+// ── Bulk selection (Feature 10) ──────────────────────────────
+function onCheckboxChange() {
+    const checked = document.querySelectorAll('.row-cb:checked');
+    const bar = document.getElementById('bulk-bar');
+    document.getElementById('bulk-count').textContent = `${checked.length} selected`;
+    bar.classList.toggle('hidden', checked.length === 0);
+    document.getElementById('select-all').indeterminate =
+        checked.length > 0 && checked.length < document.querySelectorAll('.row-cb').length;
+}
+
+function toggleSelectAll(master) {
+    document.querySelectorAll('.row-cb').forEach(cb => { cb.checked = master.checked; });
+    onCheckboxChange();
+}
+
+function clearSelection() {
+    document.querySelectorAll('.row-cb').forEach(cb => { cb.checked = false; });
+    const sa = document.getElementById('select-all');
+    if (sa) { sa.checked = false; sa.indeterminate = false; }
+    document.getElementById('bulk-bar').classList.add('hidden');
+}
+
+async function bulkAction(action) {
+    const checked = Array.from(document.querySelectorAll('.row-cb:checked'));
+    if (!checked.length) return;
+    const reason = prompt(`Reason for bulk ${action} (optional):`) ?? '';
+
+    const changes = checked.map(cb => ({
+        action,
+        scan_ref: cb.dataset.ref,
+        reason,
+    }));
+
+    try {
+        const res = await fetch('/api/stage/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ changes }),
+        });
+        const json = await res.json();
+        if (json.success) {
+            showToast(`Staged ${json.data.staged} changes`, 'success');
+            clearSelection();
+            updateStagingBadge();
+            if (json.data.failed.length) {
+                console.warn('Some bulk actions failed:', json.data.failed);
+            }
+        } else {
+            showToast(json.error || 'Bulk stage failed', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
 }
 
 function openStageModal(action, ref, title) {

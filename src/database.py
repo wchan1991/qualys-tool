@@ -260,18 +260,18 @@ class ScanDatabase:
             Number of scans saved
         """
         cursor = self.conn.cursor()
-        now = datetime.now().isoformat()
+        now = datetime.now().astimezone().isoformat()
         count = 0
-        
+
         for scan in scans:
             tags = scan.get("tags", [])
             if isinstance(tags, str):
                 tags = [tags] if tags else []
-            
+
             try:
                 cursor.execute("""
-                    INSERT INTO scans 
-                    (ref, title, target, status, scan_type, option_profile, 
+                    INSERT INTO scans
+                    (ref, title, target, status, scan_type, option_profile,
                      launched, duration, tags, raw_data, fetched_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
@@ -288,7 +288,7 @@ class ScanDatabase:
                     now,
                 ))
                 count += 1
-                
+
                 # Also record tag usage
                 for tag in tags:
                     cursor.execute("""
@@ -354,7 +354,7 @@ class ScanDatabase:
             Number of scheduled scans saved
         """
         cursor = self.conn.cursor()
-        now = datetime.now().isoformat()
+        now = datetime.now().astimezone().isoformat()
         count = 0
 
         # Clear and repopulate the targets index for the new snapshot
@@ -407,80 +407,190 @@ class ScanDatabase:
 
         Args:
             target_type: 'ip' | 'range' | 'asset_group' | 'tag' | 'ip_list'
-            target_value: literal value to match
+                         | 'option_profile' | 'scanner'
+            target_value: literal value or CIDR to match
 
         Returns:
             {'scheduled': [...], 'recent': [...]}
         """
+        import ipaddress as _ipmod
         cursor = self.conn.cursor()
 
-        # --- scheduled scans: indexed lookup on scheduled_scan_targets ---
         scheduled: List[Dict[str, Any]] = []
+        recent: List[Dict[str, Any]] = []
+
+        # ── Option profile lookup (Features 5) ──────────────────────────
+        if target_type == "option_profile":
+            cursor.execute("SELECT MAX(fetched_at) FROM scheduled_scans")
+            latest_sched = (cursor.fetchone() or [None])[0]
+            if latest_sched:
+                cursor.execute("""
+                    SELECT DISTINCT scan_id, title, option_profile
+                    FROM scheduled_scans
+                    WHERE fetched_at = ? AND LOWER(option_profile) LIKE LOWER(?)
+                """, (latest_sched, f"%{target_value}%"))
+                for row in cursor.fetchall():
+                    scheduled.append({
+                        "scan_id": row["scan_id"],
+                        "title": row["title"],
+                        "matched_target": f"option_profile:{row['option_profile']}",
+                    })
+
+            cursor.execute("SELECT MAX(fetched_at) FROM scans")
+            latest_scan = (cursor.fetchone() or [None])[0]
+            if latest_scan:
+                cursor.execute("""
+                    SELECT ref, title, option_profile, status, target
+                    FROM scans
+                    WHERE fetched_at = ? AND LOWER(option_profile) LIKE LOWER(?)
+                """, (latest_scan, f"%{target_value}%"))
+                for r in cursor.fetchall():
+                    recent.append({
+                        "ref": r["ref"],
+                        "title": r["title"],
+                        "status": r["status"],
+                        "target": r["target"],
+                        "matched_target": f"option_profile:{r['option_profile']}",
+                    })
+            return {"scheduled": scheduled, "recent": recent}
+
+        # ── Scanner lookup (Feature 5) ───────────────────────────────────
+        if target_type == "scanner":
+            cursor.execute("SELECT MAX(fetched_at) FROM scheduled_scans")
+            latest_sched = (cursor.fetchone() or [None])[0]
+            if latest_sched:
+                cursor.execute("""
+                    SELECT DISTINCT scan_id, title, scanner
+                    FROM scheduled_scans
+                    WHERE fetched_at = ? AND LOWER(scanner) LIKE LOWER(?)
+                """, (latest_sched, f"%{target_value}%"))
+                for row in cursor.fetchall():
+                    scheduled.append({
+                        "scan_id": row["scan_id"],
+                        "title": row["title"],
+                        "matched_target": f"scanner:{row['scanner']}",
+                    })
+            # scans table has no scanner column — skip recent
+            return {"scheduled": scheduled, "recent": recent}
+
+        # ── IP / CIDR / range lookup (Feature 8) ────────────────────────
         if target_type in ("ip", "range"):
-            # IP-in-CIDR/range membership: pull all ip/range targets and
-            # check membership in Python (small N, fast enough)
+            needle_addr = None
+            needle_net = None
+
+            if "/" in target_value:
+                try:
+                    needle_net = _ipmod.ip_network(target_value, strict=False)
+                except ValueError:
+                    pass
+            else:
+                try:
+                    needle_addr = _ipmod.ip_address(target_value)
+                except ValueError:
+                    pass
+
             cursor.execute("""
-                SELECT DISTINCT t.scan_id, t.target_type, t.target_value, s.title
+                SELECT DISTINCT t.scan_id, t.target_type, t.target_value,
+                       s.title, s.active, s.target
                 FROM scheduled_scan_targets t
                 LEFT JOIN scheduled_scans s ON s.scan_id = t.scan_id
                 WHERE t.target_type IN ('ip', 'range')
             """)
-            try:
-                import ipaddress
-                needle = ipaddress.ip_address(target_value)
-            except (ValueError, ImportError):
-                needle = None
-
             for row in cursor.fetchall():
                 hit = False
-                stored = row["target_value"]
+                stored = row["target_value"] or ""
+
                 if stored == target_value:
                     hit = True
-                elif needle is not None:
+                elif needle_addr is not None:
                     try:
                         if "-" in stored:
-                            start, end = [ipaddress.ip_address(p.strip()) for p in stored.split("-", 1)]
-                            hit = start <= needle <= end
+                            start, end = [_ipmod.ip_address(p.strip()) for p in stored.split("-", 1)]
+                            hit = start <= needle_addr <= end
                         elif "/" in stored:
-                            hit = needle in ipaddress.ip_network(stored, strict=False)
+                            hit = needle_addr in _ipmod.ip_network(stored, strict=False)
                     except ValueError:
                         pass
+                elif needle_net is not None:
+                    try:
+                        if "-" in stored:
+                            start, end = [_ipmod.ip_address(p.strip()) for p in stored.split("-", 1)]
+                            hit = (start in needle_net or end in needle_net or
+                                   (start <= needle_net.network_address and
+                                    end >= needle_net.broadcast_address))
+                        elif "/" in stored:
+                            hit = needle_net.overlaps(_ipmod.ip_network(stored, strict=False))
+                        else:
+                            hit = _ipmod.ip_address(stored) in needle_net
+                    except ValueError:
+                        pass
+
                 if hit:
                     scheduled.append({
                         "scan_id": row["scan_id"],
                         "title": row["title"],
+                        "active": bool(row["active"]),
+                        "target": row["target"],
                         "matched_target": f"{row['target_type']}:{stored}",
                     })
-        else:
-            cursor.execute("""
-                SELECT DISTINCT t.scan_id, s.title, t.target_value
-                FROM scheduled_scan_targets t
-                LEFT JOIN scheduled_scans s ON s.scan_id = t.scan_id
-                WHERE t.target_type = ? AND t.target_value = ?
-            """, (target_type, target_value))
-            for row in cursor.fetchall():
-                scheduled.append({
-                    "scan_id": row["scan_id"],
-                    "title": row["title"],
-                    "matched_target": f"{target_type}:{row['target_value']}",
-                })
 
-        # --- recent (running) scans: LIKE search against scans.target ---
-        # Only meaningful for IP / asset_group / tag literal text
-        recent: List[Dict[str, Any]] = []
+            # Recent scans — LIKE on target text
+            # For CIDR searches use a prefix hint; for single IP use exact
+            cursor.execute("SELECT MAX(fetched_at) FROM scans")
+            latest_r = (cursor.fetchone() or [None])[0]
+            if latest_r:
+                if needle_net is not None:
+                    # Derive prefix from first two octets for a fast LIKE hint
+                    parts = str(needle_net.network_address).split(".")
+                    like_hint = ".".join(parts[:2]) + "."
+                else:
+                    like_hint = target_value
+
+                cursor.execute("""
+                    SELECT ref, title, target, status
+                    FROM scans
+                    WHERE fetched_at = ? AND target LIKE ?
+                """, (latest_r, f"%{like_hint}%"))
+                for r in cursor.fetchall():
+                    recent.append({
+                        "ref": r["ref"],
+                        "title": r["title"],
+                        "status": r["status"],
+                        "target": r["target"],
+                        "matched_target": r["target"],
+                    })
+            return {"scheduled": scheduled, "recent": recent}
+
+        # ── Asset group / tag / ip_list exact match ──────────────────────
+        cursor.execute("""
+            SELECT DISTINCT t.scan_id, s.title, t.target_value, s.active, s.target
+            FROM scheduled_scan_targets t
+            LEFT JOIN scheduled_scans s ON s.scan_id = t.scan_id
+            WHERE t.target_type = ? AND t.target_value = ?
+        """, (target_type, target_value))
+        for row in cursor.fetchall():
+            scheduled.append({
+                "scan_id": row["scan_id"],
+                "title": row["title"],
+                "active": bool(row["active"]),
+                "target": row["target"],
+                "matched_target": f"{target_type}:{row['target_value']}",
+            })
+
         cursor.execute("SELECT MAX(fetched_at) FROM scans")
-        row = cursor.fetchone()
-        if row and row[0]:
-            latest = row[0]
+        latest_r = (cursor.fetchone() or [None])[0]
+        if latest_r:
             cursor.execute("""
-                SELECT ref, title, target
+                SELECT ref, title, target, status
                 FROM scans
                 WHERE fetched_at = ? AND target LIKE ?
-            """, (latest, f"%{target_value}%"))
+            """, (latest_r, f"%{target_value}%"))
             for r in cursor.fetchall():
                 recent.append({
                     "ref": r["ref"],
                     "title": r["title"],
+                    "status": r["status"],
+                    "target": r["target"],
                     "matched_target": r["target"],
                 })
 
@@ -556,7 +666,7 @@ class ScanDatabase:
             ID of the staged change
         """
         cursor = self.conn.cursor()
-        now = datetime.now().isoformat()
+        now = datetime.now().astimezone().isoformat()
         payload_json = json.dumps(payload) if payload is not None else None
 
         cursor.execute("""
@@ -751,6 +861,97 @@ class ScanDatabase:
             "db_path": str(self.db_path),
         }
     
+    # ========================================================
+    # STARTUP / BACKUP UTILITIES (Feature 1)
+    # ========================================================
+
+    def is_empty(self) -> bool:
+        """Return True if the scans table has no rows (DB freshly cleared)."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM scans")
+        return cursor.fetchone()[0] == 0
+
+    def clear_scan_data(self) -> None:
+        """
+        Delete all scan/scheduled/tag data but preserve staged_changes.
+        Called at startup after a backup has been made.
+        """
+        cursor = self.conn.cursor()
+        for table in ("scans", "scheduled_scans", "tag_usage", "scheduled_scan_targets"):
+            cursor.execute(f"DELETE FROM {table}")
+        self.conn.commit()
+        logger.info("Cleared scan data from database (staged_changes preserved)")
+
+    # ========================================================
+    # DASHBOARD TRAFFIC (Feature 6)
+    # ========================================================
+
+    def get_scan_traffic_24h(self) -> List[Dict[str, Any]]:
+        """
+        Return hourly scan launch counts for the last 24 hours.
+        Returns list of 24 dicts: [{"hour": "HH:00", "count": N}, ...]
+        """
+        from datetime import datetime, timedelta
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT launched FROM scans
+            WHERE fetched_at = (SELECT MAX(fetched_at) FROM scans)
+              AND launched IS NOT NULL AND launched != ''
+        """)
+        rows = cursor.fetchall()
+
+        now = datetime.now()
+        cutoff = now - timedelta(hours=24)
+
+        # Build 24 hourly buckets
+        buckets: Dict[datetime, int] = {}
+        for h in range(24):
+            bucket_time = (cutoff + timedelta(hours=h)).replace(minute=0, second=0, microsecond=0)
+            buckets[bucket_time] = 0
+
+        for row in rows:
+            launched_str = (row["launched"] or "").strip()
+            if not launched_str:
+                continue
+            try:
+                # Qualys format: "YYYY/MM/DD HH:MM:SS" (UTC) → normalise
+                normalised = launched_str.replace("/", "-")
+                # Append Z so JS/Python both treat it as UTC → local conversion
+                if "+" not in normalised and normalised[-1] != "Z":
+                    normalised += "Z"
+                from dateutil.parser import parse as _parse
+                dt = _parse(normalised).replace(tzinfo=None)  # naive local after conversion
+            except Exception:
+                continue
+
+            if dt < cutoff:
+                continue
+            bucket = dt.replace(minute=0, second=0, microsecond=0)
+            if bucket in buckets:
+                buckets[bucket] += 1
+
+        return [
+            {"hour": k.strftime("%H:00"), "count": v}
+            for k, v in sorted(buckets.items())
+        ]
+
+    # ========================================================
+    # TOP TAGS (Feature 11)
+    # ========================================================
+
+    def get_top_tags(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Return the top N tags by distinct scan count, sorted descending."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT tag, COUNT(DISTINCT scan_ref) AS scan_count
+            FROM tag_usage
+            GROUP BY tag
+            ORDER BY scan_count DESC
+            LIMIT ?
+        """, (limit,))
+        return [{"tag": row["tag"], "count": row["scan_count"]} for row in cursor.fetchall()]
+
     def close(self) -> None:
         """Close database connection for current thread."""
         if hasattr(self._local, 'conn') and self._local.conn:
