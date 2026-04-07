@@ -267,8 +267,18 @@ class QualysClient:
 
         API Endpoint: GET /api/3.0/fo/scan/?action=list
         v2.0 is EOL June 2026 (per Qualys API VM/PC User Guide v10.38.2).
+
+        show_ags=1 / show_op=1 are required for Qualys to return asset-group
+        and tag data in the <SCAN> payload; without these flags the XML
+        omits <ASSET_GROUP_TITLE_LIST> and <TAG_LIST> entirely, which is
+        why the tag report was coming back empty (F15).
         """
-        params = {"action": "list"}
+        params = {
+            "action": "list",
+            "show_ags": "1",
+            "show_op": "1",
+            "show_status": "1",
+        }
         if state:
             params["state"] = state
         if scan_type:
@@ -283,7 +293,13 @@ class QualysClient:
 
         API Endpoint: GET /api/3.0/fo/scan/?action=list&scan_ref=...
         """
-        params = {"action": "list", "scan_ref": scan_ref, "show_status": 1}
+        params = {
+            "action": "list",
+            "scan_ref": scan_ref,
+            "show_status": 1,
+            "show_ags": "1",
+            "show_op": "1",
+        }
         response = self._request("GET", "/api/3.0/fo/scan/", params=params)
         scans = self._parse_scans(response.text)
         return scans[0] if scans else {}
@@ -367,13 +383,42 @@ class QualysClient:
         try:
             root = ET.fromstring(xml_text)
             for elem in root.findall(".//SCAN"):
-                # Extract tags
+                # Extract tags (F15): Qualys wraps tags in multiple
+                # possible paths depending on show_ags/show_tags flags.
                 tags = []
-                for tag_elem in elem.findall(".//TAG"):
-                    tag_name = self._xml_text(tag_elem, "NAME")
+                # Primary path: <TAG_LIST><TAG><NAME>…</NAME></TAG></TAG_LIST>
+                for tag_elem in elem.findall(".//TAG_LIST/TAG"):
+                    tag_name = (
+                        self._xml_text(tag_elem, "NAME")
+                        or (tag_elem.text or "").strip()
+                    )
                     if tag_name:
                         tags.append(tag_name)
-                
+                # Secondary path: <ASSET_TAGS><TAG_SET_INCLUDE><TAG>Name</TAG></TAG_SET_INCLUDE></ASSET_TAGS>
+                if not tags:
+                    for tag_elem in elem.findall(".//ASSET_TAGS/TAG_SET_INCLUDE/TAG"):
+                        tag_name = (
+                            self._xml_text(tag_elem, "NAME")
+                            or (tag_elem.text or "").strip()
+                        )
+                        if tag_name:
+                            tags.append(tag_name)
+                # Fallback: any <TAG> descendant (older API flavours)
+                if not tags:
+                    for tag_elem in elem.findall(".//TAG"):
+                        tag_name = (
+                            self._xml_text(tag_elem, "NAME")
+                            or (tag_elem.text or "").strip()
+                        )
+                        if tag_name:
+                            tags.append(tag_name)
+
+                # Asset-group list (separate from tags, shown when show_ags=1)
+                asset_groups = []
+                for ag in elem.findall(".//ASSET_GROUP_TITLE_LIST/ASSET_GROUP_TITLE"):
+                    if ag.text and ag.text.strip():
+                        asset_groups.append(ag.text.strip())
+
                 scans.append({
                     "ref": self._xml_text(elem, "REF"),
                     "title": self._xml_text(elem, "TITLE"),
@@ -384,6 +429,7 @@ class QualysClient:
                     "duration": self._xml_text(elem, "DURATION"),
                     "option_profile": self._xml_text(elem, "OPTION_PROFILE/TITLE"),
                     "tags": tags,
+                    "asset_groups": asset_groups,
                 })
         except ET.ParseError as e:
             logger.error(f"Failed to parse scan XML: {e}")
@@ -623,7 +669,15 @@ class QualysClient:
         
         # ACTIVE can be "1", "0", "2", "3", or empty
         # 1 = active, 0 = deactivated, 2 = active not paused, 3 = paused
+        # F21: derive a tri-state status ("active" / "paused" / "inactive").
         is_active = active_val in ("1", "2")
+        if active_val in ("1", "2"):
+            status_str = "active"
+        elif active_val == "3":
+            status_str = "paused"
+            is_active = False  # paused is not "running the schedule"
+        else:
+            status_str = "inactive"
         
         # v5.0 fields: TIME_ZONE/TIME_ZONE_CODE, MODIFIED date
         time_zone_code = self._xml_text(elem, "SCHEDULE/TIME_ZONE/TIME_ZONE_CODE")
@@ -633,12 +687,18 @@ class QualysClient:
             or self._xml_text(elem, "MODIFIED_DATE")
         )
 
+        # Surface tag names as a flat list so the tag report (F15) can
+        # aggregate scheduled-scan tag usage alongside on-demand scans.
+        scheduled_tags = [t["value"] for t in targets if t.get("type") == "tag"]
+
         return {
             "id": scan_id,
             "title": self._xml_text(elem, "TITLE"),
             "active": is_active,
+            "status": status_str,  # F21 tri-state
             "target": target or "N/A",
             "targets": targets,  # normalized list for reverse lookup
+            "tags": scheduled_tags,
             "option_profile": self._xml_text(elem, "OPTION_PROFILE/TITLE"),
             "scanner": self._xml_text(elem, "ISCANNER_NAME"),
             "schedule": schedule_text or "Scheduled",

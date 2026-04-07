@@ -24,6 +24,7 @@
                 <label for="lookup-value"><strong>Value</strong></label><br>
                 <input type="text" id="lookup-value" class="input" style="width:100%"
                     placeholder="e.g. 10.0.0.1 or 10.0.0.0/16"
+                    oninput="filterChips()"
                     onkeydown="if(event.key==='Enter') doLookup()">
             </div>
             <div>
@@ -33,9 +34,37 @@
         <div id="lookup-hint" class="text-muted" style="font-size:0.8rem;margin-top:0.4rem">
             Enter an IP address or CIDR range (e.g. 10.0.0.0/16). Overlapping ranges are detected.
         </div>
-        <!-- Clickable chips (Feature 12) -->
-        <div id="lookup-chips" style="margin-top:0.6rem;display:flex;flex-wrap:wrap;gap:0.4rem;min-height:1.5rem"></div>
+        <!-- Clickable chips (F17) — now includes top targets for IP mode
+             and filters live as the user types in the value box. -->
+        <div id="lookup-chips"
+             style="margin-top:0.6rem;display:flex;flex-wrap:wrap;gap:0.4rem;
+                    max-height:200px;overflow-y:auto;min-height:1.5rem;
+                    padding:4px;border-radius:6px;">
+        </div>
+        <div id="chips-empty" class="text-muted hidden" style="font-size:0.8rem;margin-top:0.2rem">
+            No history yet — refresh scans first.
+        </div>
     </div>
+</div>
+
+<!-- F21: Status filter + sort controls applied against the cached results -->
+<div id="results-controls" class="hidden" style="display:flex;gap:8px;margin:0 0 8px 0;flex-wrap:wrap">
+    <select id="lookup-status-filter" class="input" onchange="applyResultsView()">
+        <option value="">All statuses</option>
+        <option value="active">Active</option>
+        <option value="paused">Paused</option>
+        <option value="inactive">Inactive</option>
+        <option value="running">Running</option>
+        <option value="finished">Finished</option>
+        <option value="error">Error</option>
+        <option value="canceled">Canceled</option>
+    </select>
+    <select id="lookup-sort" class="input" onchange="applyResultsView()">
+        <option value="title">Sort: Title</option>
+        <option value="owner">Sort: Owner</option>
+        <option value="target">Sort: Target</option>
+        <option value="status">Sort: Status</option>
+    </select>
 </div>
 
 <div id="results-container" class="hidden">
@@ -44,7 +73,7 @@
         <div class="card-body">
             <div class="table-scroll-wrap">
                 <table class="table">
-                    <thead><tr><th>Title</th><th>Target</th><th>Status</th><th>Matched</th><th></th></tr></thead>
+                    <thead><tr><th>Title</th><th>Owner</th><th>Target</th><th>Status</th><th>Matched</th><th></th></tr></thead>
                     <tbody id="sched-tbody"></tbody>
                 </table>
             </div>
@@ -56,7 +85,7 @@
         <div class="card-body">
             <div class="table-scroll-wrap">
                 <table class="table">
-                    <thead><tr><th>Title</th><th>Target</th><th>Status</th><th>Matched</th><th></th></tr></thead>
+                    <thead><tr><th>Title</th><th>Owner</th><th>Target</th><th>Status</th><th>Matched</th><th></th></tr></thead>
                     <tbody id="recent-tbody"></tbody>
                 </table>
             </div>
@@ -73,9 +102,27 @@
 <script>
 let _sources = null;
 let _activeChip = null;
+// F17/F21: cache the last result so status/sort changes don't re-fetch
+let _lastLookupResults = null;
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadSources();
+    loadSources().then(() => {
+        // F25: if arrived from a dashboard metric card, run the status flow
+        const params = new URLSearchParams(location.search);
+        const type = params.get('type');
+        const value = params.get('value');
+        if (type === 'status' && value) {
+            lookupByStatus(value);
+        } else if (type && value) {
+            const sel = document.getElementById('lookup-type');
+            if ([...sel.options].some(o => o.value === type)) {
+                sel.value = type;
+                onTypeChange();
+            }
+            document.getElementById('lookup-value').value = value;
+            doLookup();
+        }
+    });
 });
 
 async function loadSources() {
@@ -92,9 +139,9 @@ async function loadSources() {
 function onTypeChange() {
     const type = document.getElementById('lookup-type').value;
     const hints = {
-        ip: 'Enter an IP address or CIDR range (e.g. 10.0.0.0/16). Overlapping ranges are detected.',
-        asset_group: 'Enter the exact asset group name.',
-        tag: 'Enter the exact tag name.',
+        ip: 'Enter an IP, CIDR range, or click a chip of a frequently-used target.',
+        asset_group: 'Enter the exact asset group name, or click a chip.',
+        tag: 'Enter the exact tag name, or click a chip.',
         option_profile: 'Enter part of an option profile name. Case-insensitive.',
         scanner: 'Enter part of a scanner name. Case-insensitive. Only matches scheduled scans.',
     };
@@ -113,12 +160,16 @@ function onTypeChange() {
 
 function renderChips(type) {
     const container = document.getElementById('lookup-chips');
+    const emptyEl = document.getElementById('chips-empty');
     container.innerHTML = '';
+    emptyEl.classList.add('hidden');
 
-    if (!_sources || type === 'ip') return;
+    if (!_sources) return;
 
     let items = [];
-    if (type === 'asset_group') {
+    if (type === 'ip') {
+        items = (_sources.top_targets || []).map(t => t.target);
+    } else if (type === 'asset_group') {
         items = (_sources.asset_groups || []).map(g => g.title || g.name || g.id);
     } else if (type === 'tag') {
         items = (_sources.tags || []).map(t => t.name || t.id);
@@ -128,19 +179,35 @@ function renderChips(type) {
         items = (_sources.scanners || []).map(s => s.name || s.id);
     }
 
-    items.filter(Boolean).forEach(name => {
+    items = items.filter(Boolean);
+    if (!items.length) {
+        emptyEl.classList.remove('hidden');
+        return;
+    }
+
+    items.forEach(name => {
         const btn = document.createElement('button');
         btn.className = 'chip';
         btn.textContent = name;
         btn.onclick = () => {
             document.getElementById('lookup-value').value = name;
-            // Mark active chip
             container.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
             btn.classList.add('active');
             _activeChip = name;
             doLookup();
         };
         container.appendChild(btn);
+    });
+
+    // Apply the current filter text (if any) after a re-render
+    filterChips();
+}
+
+// F17: live-filter chips as the user types in the value field
+function filterChips() {
+    const q = (document.getElementById('lookup-value').value || '').toLowerCase().trim();
+    document.querySelectorAll('#lookup-chips .chip').forEach(chip => {
+        chip.style.display = !q || chip.textContent.toLowerCase().includes(q) ? '' : 'none';
     });
 }
 
@@ -151,48 +218,108 @@ async function doLookup() {
 
     document.getElementById('results-container').classList.add('hidden');
     document.getElementById('empty-result').classList.add('hidden');
+    document.getElementById('results-controls').classList.add('hidden');
 
     try {
         const res = await fetch(`/api/lookup?type=${encodeURIComponent(type)}&value=${encodeURIComponent(value)}`);
         const json = await res.json();
         if (!json.success) { showToast(json.error || 'Lookup failed', 'error'); return; }
-
-        const { scheduled = [], recent = [] } = json.data;
-
-        if (!scheduled.length && !recent.length) {
-            document.getElementById('empty-result').classList.remove('hidden');
-            return;
-        }
-
-        document.getElementById('sched-count').textContent = scheduled.length;
-        document.getElementById('recent-count').textContent = recent.length;
-
-        document.getElementById('sched-tbody').innerHTML = scheduled.length
-            ? scheduled.map(s => `
-                <tr>
-                    <td><a href="/scheduled/${encodeURIComponent(s.scan_id || s.id)}">${esc(s.title || '—')}</a></td>
-                    <td>${esc(s.target || '—')}</td>
-                    <td><span class="status-badge ${s.active ? 'status-active' : 'status-inactive'}">${s.active ? 'Active' : 'Inactive'}</span></td>
-                    <td><small class="text-muted">${esc(s.matched_target || '—')}</small></td>
-                    <td><a href="/scheduled/${encodeURIComponent(s.scan_id || s.id)}" class="btn btn-sm">Details</a></td>
-                </tr>`).join('')
-            : '<tr><td colspan="5" class="text-muted text-center">None</td></tr>';
-
-        document.getElementById('recent-tbody').innerHTML = recent.length
-            ? recent.map(s => `
-                <tr>
-                    <td><a href="/scans/${encodeURIComponent(s.ref)}">${esc(s.title || '—')}</a></td>
-                    <td>${esc(s.target || '—')}</td>
-                    <td><span class="status-badge status-${(s.status||'').toLowerCase()}">${esc(s.status || '—')}</span></td>
-                    <td><small class="text-muted">${esc(s.matched_target || '—')}</small></td>
-                    <td><a href="/scans/${encodeURIComponent(s.ref)}" class="btn btn-sm">Details</a></td>
-                </tr>`).join('')
-            : '<tr><td colspan="5" class="text-muted text-center">None</td></tr>';
-
-        document.getElementById('results-container').classList.remove('hidden');
+        _lastLookupResults = json.data || { scheduled: [], recent: [] };
+        applyResultsView();
     } catch (e) {
         showToast('Network error', 'error');
     }
+}
+
+// F25: arrive from dashboard status card
+async function lookupByStatus(status) {
+    document.getElementById('lookup-value').value = `status:${status}`;
+    document.getElementById('results-container').classList.add('hidden');
+    document.getElementById('empty-result').classList.add('hidden');
+    document.getElementById('results-controls').classList.add('hidden');
+    try {
+        const res = await fetch(`/api/scans/by-status?status=${encodeURIComponent(status)}`);
+        const json = await res.json();
+        if (!json.success) { showToast(json.error || 'Lookup failed', 'error'); return; }
+        _lastLookupResults = json.data || { scheduled: [], recent: [] };
+        // Pre-select a matching status filter when applicable
+        const sel = document.getElementById('lookup-status-filter');
+        if ([...sel.options].some(o => o.value === status)) sel.value = status;
+        applyResultsView();
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function schedStatusOf(s) {
+    return (s.status || (s.active ? 'active' : 'inactive')).toLowerCase();
+}
+
+function applyResultsView() {
+    if (!_lastLookupResults) return;
+    const { scheduled = [], recent = [] } = _lastLookupResults;
+
+    const filter = (document.getElementById('lookup-status-filter').value || '').toLowerCase();
+    const sortKey = document.getElementById('lookup-sort').value || 'title';
+
+    let filteredSched = scheduled.slice();
+    let filteredRecent = recent.slice();
+
+    if (filter) {
+        filteredSched = filteredSched.filter(s => schedStatusOf(s) === filter);
+        filteredRecent = filteredRecent.filter(s => (s.status || '').toLowerCase() === filter);
+    }
+
+    const cmp = (a, b) => {
+        const av = (a[sortKey] || '').toString().toLowerCase();
+        const bv = (b[sortKey] || '').toString().toLowerCase();
+        return av < bv ? -1 : av > bv ? 1 : 0;
+    };
+    filteredSched.sort(cmp);
+    filteredRecent.sort(cmp);
+
+    document.getElementById('results-controls').classList.remove('hidden');
+
+    if (!filteredSched.length && !filteredRecent.length) {
+        document.getElementById('results-container').classList.add('hidden');
+        document.getElementById('empty-result').classList.remove('hidden');
+        return;
+    }
+    document.getElementById('empty-result').classList.add('hidden');
+
+    document.getElementById('sched-count').textContent = filteredSched.length;
+    document.getElementById('recent-count').textContent = filteredRecent.length;
+
+    document.getElementById('sched-tbody').innerHTML = filteredSched.length
+        ? filteredSched.map(s => {
+            const key = schedStatusOf(s);
+            const label = key === 'active' ? '✓ Active' : key === 'paused' ? '⏸ Paused' : '○ Inactive';
+            const sid = s.scan_id || s.id;
+            return `
+                <tr>
+                    <td><a href="/scheduled/${encodeURIComponent(sid)}">${esc(s.title || '—')}</a></td>
+                    <td>${esc(s.owner || '—')}</td>
+                    <td>${esc(s.target || '—')}</td>
+                    <td><span class="status-badge status-${key}">${label}</span></td>
+                    <td><small class="text-muted">${esc(s.matched_target || '—')}</small></td>
+                    <td><a href="/scheduled/${encodeURIComponent(sid)}" class="btn btn-sm">Details</a></td>
+                </tr>`;
+        }).join('')
+        : '<tr><td colspan="6" class="text-muted text-center">None</td></tr>';
+
+    document.getElementById('recent-tbody').innerHTML = filteredRecent.length
+        ? filteredRecent.map(s => `
+            <tr>
+                <td><a href="/scans/${encodeURIComponent(s.ref)}">${esc(s.title || '—')}</a></td>
+                <td>${esc(s.owner || '—')}</td>
+                <td>${esc(s.target || '—')}</td>
+                <td><span class="status-badge status-${(s.status||'').toLowerCase()}">${esc(s.status || '—')}</span></td>
+                <td><small class="text-muted">${esc(s.matched_target || '—')}</small></td>
+                <td><a href="/scans/${encodeURIComponent(s.ref)}" class="btn btn-sm">Details</a></td>
+            </tr>`).join('')
+        : '<tr><td colspan="6" class="text-muted text-center">None</td></tr>';
+
+    document.getElementById('results-container').classList.remove('hidden');
 }
 
 function formatDate(d) {

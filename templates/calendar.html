@@ -47,9 +47,21 @@ function initCalendar() {
         },
         events: fetchEvents,
         eventClick: function(info) {
-            if (info.event.url) {
-                info.jsEvent.preventDefault();
-                window.location.href = info.event.url;
+            // F16: always prevent default, fall back to extendedProps when
+            // the top-level URL is missing (which previously happened when
+            // _scheduled_events read scan_id instead of id).
+            info.jsEvent.preventDefault();
+            const e = info.event;
+            const props = e.extendedProps || {};
+            let url = e.url || '';
+            if (!url) {
+                if (props.scan_id) url = `/scheduled/${encodeURIComponent(props.scan_id)}`;
+                else if (props.ref) url = `/scans/${encodeURIComponent(props.ref)}`;
+            }
+            if (url) {
+                window.location.href = url;
+            } else {
+                showToast('No detail page for this event', 'error');
             }
         },
         eventDidMount: function(info) {

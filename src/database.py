@@ -147,6 +147,9 @@ class ScanDatabase:
         """)
         
         # Scheduled scans (recurring scan configurations)
+        # `status` is the tri-state variant added in Wave 3 (F21): one of
+        # "active", "paused", "inactive". The legacy `active` boolean is
+        # kept for backward compatibility with older queries.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS scheduled_scans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,6 +157,7 @@ class ScanDatabase:
                 title TEXT,
                 target TEXT,
                 active INTEGER,
+                status TEXT,
                 option_profile TEXT,
                 scanner TEXT,
                 schedule TEXT,
@@ -247,6 +251,19 @@ class ScanDatabase:
                 ADD COLUMN payload TEXT
             """)
             logger.info("Migration complete: payload column added")
+
+        # F21: tri-state status column on scheduled_scans
+        cursor.execute("PRAGMA table_info(scheduled_scans)")
+        sched_cols = [row[1] for row in cursor.fetchall()]
+        if 'status' not in sched_cols:
+            logger.info("Migrating database: adding status column to scheduled_scans")
+            cursor.execute("ALTER TABLE scheduled_scans ADD COLUMN status TEXT")
+            cursor.execute("""
+                UPDATE scheduled_scans
+                   SET status = CASE WHEN active = 1 THEN 'active' ELSE 'inactive' END
+                 WHERE status IS NULL
+            """)
+            logger.info("Migration complete: status column added and backfilled")
     
     # ========================================================
     # SCAN STORAGE
@@ -362,16 +379,20 @@ class ScanDatabase:
 
         for scan in scans:
             try:
+                status_value = scan.get("status") or (
+                    "active" if scan.get("active") else "inactive"
+                )
                 cursor.execute("""
                     INSERT INTO scheduled_scans
-                    (scan_id, title, target, active, option_profile, scanner,
+                    (scan_id, title, target, active, status, option_profile, scanner,
                      schedule, next_launch, last_launch, owner, raw_data, fetched_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     scan.get("id", ""),
                     scan.get("title", ""),
                     scan.get("target", ""),
                     1 if scan.get("active") else 0,
+                    status_value,
                     scan.get("option_profile", ""),
                     scan.get("scanner", ""),
                     scan.get("schedule", ""),
@@ -391,6 +412,17 @@ class ScanDatabase:
                         (scan_id, target_type, target_value, fetched_at)
                         VALUES (?, ?, ?, ?)
                     """, (scan_id, tgt.get("type", ""), tgt.get("value", ""), now))
+
+                # Record scheduled-scan tag usage so the tag report (F15)
+                # aggregates both on-demand and scheduled populations.
+                scheduled_tags = scan.get("tags", []) or []
+                if isinstance(scheduled_tags, str):
+                    scheduled_tags = [scheduled_tags] if scheduled_tags else []
+                for tag in scheduled_tags:
+                    cursor.execute("""
+                        INSERT INTO tag_usage (scan_ref, tag, recorded_at)
+                        VALUES (?, ?, ?)
+                    """, (f"sched:{scan_id}", tag, now))
 
             except sqlite3.IntegrityError:
                 logger.debug(f"Scheduled scan {scan.get('id')} already exists for {now}")
@@ -419,13 +451,27 @@ class ScanDatabase:
         scheduled: List[Dict[str, Any]] = []
         recent: List[Dict[str, Any]] = []
 
+        # F21 helper: derive tri-state status from row (prefers `status`
+        # column, falls back to `active` boolean for pre-migration rows).
+        def _sched_status(row):
+            try:
+                keys = row.keys() if hasattr(row, "keys") else []
+                if "status" in keys and row["status"]:
+                    return row["status"]
+            except Exception:
+                pass
+            try:
+                return "active" if bool(row["active"]) else "inactive"
+            except Exception:
+                return "inactive"
+
         # ── Option profile lookup (Features 5) ──────────────────────────
         if target_type == "option_profile":
             cursor.execute("SELECT MAX(fetched_at) FROM scheduled_scans")
             latest_sched = (cursor.fetchone() or [None])[0]
             if latest_sched:
                 cursor.execute("""
-                    SELECT DISTINCT scan_id, title, option_profile
+                    SELECT DISTINCT scan_id, title, option_profile, owner, status, active, target
                     FROM scheduled_scans
                     WHERE fetched_at = ? AND LOWER(option_profile) LIKE LOWER(?)
                 """, (latest_sched, f"%{target_value}%"))
@@ -433,6 +479,10 @@ class ScanDatabase:
                     scheduled.append({
                         "scan_id": row["scan_id"],
                         "title": row["title"],
+                        "owner": row["owner"],
+                        "status": _sched_status(row),
+                        "active": bool(row["active"]),
+                        "target": row["target"],
                         "matched_target": f"option_profile:{row['option_profile']}",
                     })
 
@@ -449,6 +499,7 @@ class ScanDatabase:
                         "ref": r["ref"],
                         "title": r["title"],
                         "status": r["status"],
+                        "owner": None,
                         "target": r["target"],
                         "matched_target": f"option_profile:{r['option_profile']}",
                     })
@@ -460,7 +511,7 @@ class ScanDatabase:
             latest_sched = (cursor.fetchone() or [None])[0]
             if latest_sched:
                 cursor.execute("""
-                    SELECT DISTINCT scan_id, title, scanner
+                    SELECT DISTINCT scan_id, title, scanner, owner, status, active, target
                     FROM scheduled_scans
                     WHERE fetched_at = ? AND LOWER(scanner) LIKE LOWER(?)
                 """, (latest_sched, f"%{target_value}%"))
@@ -468,6 +519,10 @@ class ScanDatabase:
                     scheduled.append({
                         "scan_id": row["scan_id"],
                         "title": row["title"],
+                        "owner": row["owner"],
+                        "status": _sched_status(row),
+                        "active": bool(row["active"]),
+                        "target": row["target"],
                         "matched_target": f"scanner:{row['scanner']}",
                     })
             # scans table has no scanner column — skip recent
@@ -491,7 +546,7 @@ class ScanDatabase:
 
             cursor.execute("""
                 SELECT DISTINCT t.scan_id, t.target_type, t.target_value,
-                       s.title, s.active, s.target
+                       s.title, s.active, s.status, s.target, s.owner
                 FROM scheduled_scan_targets t
                 LEFT JOIN scheduled_scans s ON s.scan_id = t.scan_id
                 WHERE t.target_type IN ('ip', 'range')
@@ -530,6 +585,8 @@ class ScanDatabase:
                         "scan_id": row["scan_id"],
                         "title": row["title"],
                         "active": bool(row["active"]),
+                        "status": _sched_status(row),
+                        "owner": row["owner"],
                         "target": row["target"],
                         "matched_target": f"{row['target_type']}:{stored}",
                     })
@@ -556,6 +613,7 @@ class ScanDatabase:
                         "ref": r["ref"],
                         "title": r["title"],
                         "status": r["status"],
+                        "owner": None,
                         "target": r["target"],
                         "matched_target": r["target"],
                     })
@@ -563,7 +621,7 @@ class ScanDatabase:
 
         # ── Asset group / tag / ip_list exact match ──────────────────────
         cursor.execute("""
-            SELECT DISTINCT t.scan_id, s.title, t.target_value, s.active, s.target
+            SELECT DISTINCT t.scan_id, s.title, t.target_value, s.active, s.status, s.target, s.owner
             FROM scheduled_scan_targets t
             LEFT JOIN scheduled_scans s ON s.scan_id = t.scan_id
             WHERE t.target_type = ? AND t.target_value = ?
@@ -573,6 +631,8 @@ class ScanDatabase:
                 "scan_id": row["scan_id"],
                 "title": row["title"],
                 "active": bool(row["active"]),
+                "status": _sched_status(row),
+                "owner": row["owner"],
                 "target": row["target"],
                 "matched_target": f"{target_type}:{row['target_value']}",
             })
@@ -590,6 +650,7 @@ class ScanDatabase:
                     "ref": r["ref"],
                     "title": r["title"],
                     "status": r["status"],
+                    "owner": None,
                     "target": r["target"],
                     "matched_target": r["target"],
                 })
@@ -609,30 +670,36 @@ class ScanDatabase:
         latest_time = row[0]
         
         cursor.execute("""
-            SELECT scan_id, title, target, active, option_profile, scanner,
-                   schedule, next_launch, last_launch, owner, fetched_at
+            SELECT scan_id, title, target, active, status, option_profile, scanner,
+                   schedule, next_launch, last_launch, owner, raw_data, fetched_at
             FROM scheduled_scans
             WHERE fetched_at = ?
             ORDER BY next_launch ASC
         """, (latest_time,))
-        
-        return [
-            {
+
+        out = []
+        for row in cursor.fetchall():
+            keys = row.keys() if hasattr(row, "keys") else []
+            status_val = row["status"] if "status" in keys else None
+            if not status_val:
+                status_val = "active" if bool(row["active"]) else "inactive"
+            out.append({
                 "id": row["scan_id"],
                 "title": row["title"],
                 "target": row["target"],
                 "active": bool(row["active"]),
+                "status": status_val,
                 "option_profile": row["option_profile"],
                 "scanner": row["scanner"],
                 "schedule": row["schedule"],
                 "next_launch": row["next_launch"],
                 "last_launch": row["last_launch"],
                 "owner": row["owner"],
+                "raw_data": row["raw_data"] if "raw_data" in keys else None,
                 "fetched_at": row["fetched_at"],
                 "type": "scheduled",
-            }
-            for row in cursor.fetchall()
-        ]
+            })
+        return out
     
     # ========================================================
     # STAGING AREA
@@ -951,6 +1018,81 @@ class ScanDatabase:
             LIMIT ?
         """, (limit,))
         return [{"tag": row["tag"], "count": row["scan_count"]} for row in cursor.fetchall()]
+
+    def get_top_targets(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Return the most-used target strings across the latest snapshots of
+        scheduled scans and on-demand scans (F17). Used to populate lookup
+        chips so users can click to search common targets.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT target, COUNT(*) AS usage_count FROM (
+                SELECT target FROM scheduled_scans
+                 WHERE fetched_at = (SELECT MAX(fetched_at) FROM scheduled_scans)
+                UNION ALL
+                SELECT target FROM scans
+                 WHERE fetched_at = (SELECT MAX(fetched_at) FROM scans)
+            )
+            WHERE target IS NOT NULL AND target != '' AND target != 'N/A'
+            GROUP BY target
+            ORDER BY usage_count DESC
+            LIMIT ?
+        """, (limit,))
+        return [
+            {"target": row["target"], "count": row["usage_count"]}
+            for row in cursor.fetchall()
+        ]
+
+    def get_recent_scans(self, hours: int = 6) -> List[Dict[str, Any]]:
+        """
+        Return on-demand scans whose launched timestamp falls within the last
+        `hours` window (F13). Reused by the Dashboard "Recent Scans (last 6h)"
+        panel and by /api/scans/recent.
+        """
+        from datetime import datetime, timedelta, timezone
+        try:
+            from dateutil.parser import parse as _parse_dt
+        except ImportError:
+            _parse_dt = None
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT ref, title, target, status, scan_type, option_profile,
+                   launched, duration, tags, raw_data, fetched_at
+            FROM scans
+            WHERE fetched_at = (SELECT MAX(fetched_at) FROM scans)
+              AND launched IS NOT NULL AND launched != ''
+            ORDER BY launched DESC
+        """)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        out = []
+        for row in cursor.fetchall():
+            s = (row["launched"] or "").strip().replace("/", "-")
+            if not s:
+                continue
+            if s[-1] not in "Zz" and "+" not in s[-6:]:
+                s += "Z"
+            try:
+                dt = _parse_dt(s) if _parse_dt else datetime.fromisoformat(s.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt >= cutoff:
+                out.append({
+                    "ref": row["ref"],
+                    "title": row["title"],
+                    "target": row["target"],
+                    "status": row["status"],
+                    "type": row["scan_type"],
+                    "option_profile": row["option_profile"],
+                    "launched": row["launched"],
+                    "duration": row["duration"],
+                    "tags": json.loads(row["tags"]) if row["tags"] else [],
+                    "fetched_at": row["fetched_at"],
+                })
+        return out
 
     def close(self) -> None:
         """Close database connection for current thread."""

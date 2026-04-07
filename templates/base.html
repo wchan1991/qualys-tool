@@ -17,27 +17,27 @@
             <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
                 📊 Dashboard
             </a>
-            <a href="{{ url_for('scheduled_page') }}" class="nav-link {% if request.endpoint == 'scheduled_page' %}active{% endif %}">
-                📅 Scheduled
+            <a href="{{ url_for('lookup_page') }}" class="nav-link {% if request.endpoint == 'lookup_page' %}active{% endif %}">
+                🔎 Lookup
             </a>
             <a href="{{ url_for('scans_page') }}" class="nav-link {% if request.endpoint == 'scans_page' %}active{% endif %}">
-                🔍 Recent
+                🏎️ Non-Scheduled
             </a>
-            <a href="{{ url_for('staging_page') }}" class="nav-link {% if request.endpoint == 'staging_page' %}active{% endif %}">
-                📋 Staging
-                <span id="staging-badge" class="badge hidden">0</span>
-            </a>
-            <a href="{{ url_for('tags_page') }}" class="nav-link {% if request.endpoint == 'tags_page' %}active{% endif %}">
-                🏷️ Tags
+            <a href="{{ url_for('scheduled_page') }}" class="nav-link {% if request.endpoint == 'scheduled_page' %}active{% endif %}">
+                📅 Scheduled
             </a>
             <a href="{{ url_for('calendar_page') }}" class="nav-link {% if request.endpoint == 'calendar_page' %}active{% endif %}">
                 🗓️ Calendar
             </a>
-            <a href="{{ url_for('lookup_page') }}" class="nav-link {% if request.endpoint == 'lookup_page' %}active{% endif %}">
-                🔎 Lookup
+            <a href="{{ url_for('tags_page') }}" class="nav-link {% if request.endpoint == 'tags_page' %}active{% endif %}">
+                🏷️ Tags
             </a>
             <a href="{{ url_for('scanners_page') }}" class="nav-link {% if request.endpoint == 'scanners_page' %}active{% endif %}">
                 🖥️ Scanners
+            </a>
+            <a href="{{ url_for('staging_page') }}" class="nav-link {% if request.endpoint == 'staging_page' %}active{% endif %}">
+                📋 Staging
+                <span id="staging-badge" class="badge hidden">0</span>
             </a>
         </div>
         <div class="nav-actions">

@@ -1,46 +1,92 @@
-{% extends "base.html" %}
-{% block title %}Initializing - Qualys Scan Manager{% endblock %}
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Initializing — Qualys Scan Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        body.init-fullscreen {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-secondary);
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .init-wrapper {
+            max-width: 680px;
+            width: 100%;
+        }
+        .init-card {
+            background: var(--bg-primary);
+            border-radius: 12px;
+            padding: 48px 40px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            border: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+        }
+        .init-logo { font-size: 64px; text-align: center; line-height: 1; }
+        .init-title { font-size: 28px; text-align: center; margin: 12px 0 4px 0; color: var(--text-primary); }
+        .init-subtitle { color: var(--text-muted); text-align: center; margin: 0 0 32px 0; }
+        .init-progress-label { font-weight: 500; color: var(--text-primary); margin-bottom: 0.5rem; }
+        .init-steps { list-style: none; padding: 0; margin: 1.25rem 0 0 0; }
+        .init-steps li { padding: 6px 0; color: var(--text-muted); transition: color 0.15s; }
+        .init-steps li.active { color: var(--text-primary); font-weight: 500; }
+        .init-steps li.done { color: var(--success, #16a34a); }
+        .init-steps li.failed { color: #dc2626; }
+        .init-error {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: rgba(239,68,68,0.1);
+            border: 1px solid rgba(239,68,68,0.3);
+            border-radius: 8px;
+            color: #dc2626;
+        }
+        .init-backup-card {
+            background: var(--bg-primary);
+            border-radius: 12px;
+            padding: 24px 32px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+            border: 1px solid var(--border);
+        }
+        .init-backup-card h2 { font-size: 18px; margin: 0 0 12px 0; color: var(--text-primary); }
+    </style>
+</head>
+<body class="init-fullscreen">
+    <div class="init-wrapper">
+        <!-- Progress card -->
+        <div class="init-card">
+            <div class="init-logo">🔒</div>
+            <h1 class="init-title">Qualys Scan Manager</h1>
+            <p class="init-subtitle">Preparing your session…</p>
 
-{% block content %}
-<div style="max-width:600px;margin:3rem auto">
-
-    <!-- Progress card -->
-    <div class="card" style="margin-bottom:1.5rem">
-        <div class="card-header">
-            <h2>🔒 Initializing Qualys Scan Manager</h2>
-        </div>
-        <div class="card-body">
-            <div id="init-status" style="margin-bottom:0.75rem;font-weight:500">
-                Starting up…
-            </div>
+            <div id="init-status" class="init-progress-label">Starting up…</div>
             <div class="progress-wrap">
                 <div class="progress-bar" id="progress-bar"></div>
             </div>
-            <ul id="step-list" style="list-style:none;padding:0;margin-top:1rem">
-                <li id="step-1">⏳ Step 1: Testing authentication…</li>
-                <li id="step-2" style="color:var(--text-secondary)">⏳ Step 2: Refreshing scans from Qualys…</li>
-                <li id="step-3" style="color:var(--text-secondary)">⏳ Step 3: Loading target sources…</li>
+            <ul class="init-steps" id="step-list">
+                <li id="step-1" class="active">⏳ Step 1: Testing authentication…</li>
+                <li id="step-2">⏳ Step 2: Refreshing scans from Qualys…</li>
+                <li id="step-3">⏳ Step 3: Loading target sources…</li>
             </ul>
-            <div id="init-error" class="hidden" style="margin-top:1rem;padding:1rem;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;color:#dc2626">
+            <div id="init-error" class="init-error hidden">
                 <strong>⚠️ Error:</strong> <span id="error-message"></span>
                 <div style="margin-top:0.75rem">
                     <button class="btn btn-primary" onclick="window.location.reload()">↻ Retry</button>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Previous Backups card -->
-    <div class="card">
-        <div class="card-header">
+        <!-- Previous Backups card -->
+        <div class="init-backup-card">
             <h2>📦 Previous Backups</h2>
-        </div>
-        <div class="card-body">
-            <div id="backups-loading" class="text-muted text-center" style="padding:1rem">Loading backups…</div>
+            <div id="backups-loading" class="text-muted text-center" style="padding:0.5rem">Loading backups…</div>
             <div id="backups-container" class="hidden">
                 <p class="text-muted" style="font-size:0.85rem;margin-bottom:0.75rem">
-                    Restore a backup to bring back previously fetched scan data.
-                    The app will reload after restore.
+                    Restore a backup to bring back previously fetched scan data. The app will reload after restore.
                 </p>
                 <div class="table-scroll-wrap">
                     <table class="table">
@@ -49,109 +95,144 @@
                     </table>
                 </div>
             </div>
-            <div id="backups-empty" class="hidden text-muted text-center" style="padding:1rem">
+            <div id="backups-empty" class="hidden text-muted text-center" style="padding:0.5rem">
                 No backups found yet. A backup is created automatically on each app launch.
             </div>
         </div>
     </div>
 
-</div>
-{% endblock %}
+    <div id="toast" class="toast hidden"></div>
 
-{% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-    loadBackups();
-    runInit();
-});
+    <script>
+    // Apply saved theme before paint to avoid flash
+    (function() {
+        const saved = localStorage.getItem('theme');
+        if (saved) {
+            document.documentElement.setAttribute('data-theme', saved);
+        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+    })();
 
-async function runInit() {
-    const steps = [
-        { id: 'step-1', label: '✅ Step 1: Authentication OK', url: '/api/health', method: 'GET' },
-        { id: 'step-2', label: '✅ Step 2: Scans refreshed', url: '/api/refresh-all', method: 'POST' },
-        { id: 'step-3', label: '✅ Step 3: Target sources loaded', url: '/api/target-sources', method: 'GET' },
-    ];
-    const pct = [33, 66, 100];
+    function showToast(message, type = 'info') {
+        const t = document.getElementById('toast');
+        if (!t) return;
+        t.textContent = message;
+        t.className = `toast toast-${type}`;
+        t.classList.remove('hidden');
+        setTimeout(() => t.classList.add('hidden'), 4000);
+    }
 
-    for (let i = 0; i < steps.length; i++) {
-        const step = steps[i];
-        const el = document.getElementById(step.id);
-        el.style.color = '';
-        document.getElementById('init-status').textContent = `Running step ${i + 1} of ${steps.length}…`;
-
+    function formatDate(dateStr) {
+        if (!dateStr) return '';
         try {
-            const res = await fetch(step.url, { method: step.method });
+            let s = String(dateStr).trim();
+            if (/^\d{4}\/\d{2}\/\d{2}/.test(s)) {
+                s = s.replace(/\//g, '-');
+                if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+            }
+            const date = new Date(s);
+            if (isNaN(date.getTime())) return dateStr;
+            return date.toLocaleString(undefined, { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+        } catch (e) { return dateStr; }
+    }
+
+    function esc(text) {
+        if (!text) return '';
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        loadBackups();
+        runInit();
+    });
+
+    async function runInit() {
+        const steps = [
+            { id: 'step-1', label: '✅ Step 1: Authentication OK', url: '/api/health', method: 'GET' },
+            { id: 'step-2', label: '✅ Step 2: Scans refreshed', url: '/api/refresh-all', method: 'POST' },
+            { id: 'step-3', label: '✅ Step 3: Target sources loaded', url: '/api/target-sources', method: 'GET' },
+        ];
+        const pct = [33, 66, 100];
+
+        for (let i = 0; i < steps.length; i++) {
+            const step = steps[i];
+            const el = document.getElementById(step.id);
+            el.classList.remove('done', 'failed');
+            el.classList.add('active');
+            document.getElementById('init-status').textContent = `Running step ${i + 1} of ${steps.length}…`;
+
+            try {
+                const res = await fetch(step.url, { method: step.method });
+                const json = await res.json();
+                if (!json.success) throw new Error(json.error || 'API returned error');
+                el.textContent = step.label;
+                el.classList.remove('active');
+                el.classList.add('done');
+            } catch (e) {
+                el.textContent = `❌ Step ${i + 1}: ${e.message}`;
+                el.classList.remove('active');
+                el.classList.add('failed');
+                document.getElementById('init-status').textContent = 'Initialization failed.';
+                document.getElementById('error-message').textContent = e.message;
+                document.getElementById('init-error').classList.remove('hidden');
+                return;
+            }
+
+            document.getElementById('progress-bar').style.width = pct[i] + '%';
+        }
+
+        document.getElementById('init-status').textContent = '✅ Ready! Redirecting to dashboard…';
+        setTimeout(() => { window.location.href = '/'; }, 1000);
+    }
+
+    async function loadBackups() {
+        try {
+            const res = await fetch('/api/backups');
             const json = await res.json();
-            if (!json.success) throw new Error(json.error || 'API returned error');
-            el.textContent = step.label;
-            el.style.color = 'var(--success, #16a34a)';
+            document.getElementById('backups-loading').classList.add('hidden');
+
+            const backups = json.success ? json.data : [];
+            if (!backups.length) {
+                document.getElementById('backups-empty').classList.remove('hidden');
+                return;
+            }
+
+            document.getElementById('backups-container').classList.remove('hidden');
+            document.getElementById('backups-tbody').innerHTML = backups.map(b => `
+                <tr>
+                    <td style="font-family:monospace;font-size:0.8rem">${esc(b.filename)}</td>
+                    <td>${formatDate(b.created)}</td>
+                    <td>${(b.size_bytes / 1024).toFixed(1)} KB</td>
+                    <td>
+                        <button class="btn btn-sm btn-secondary" onclick="restoreBackup('${esc(b.filename)}')">
+                            ↩ Restore
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
         } catch (e) {
-            el.textContent = `❌ Step ${i + 1}: ${e.message}`;
-            el.style.color = '#dc2626';
-            document.getElementById('init-status').textContent = 'Initialization failed.';
-            document.getElementById('error-message').textContent = e.message;
-            document.getElementById('init-error').classList.remove('hidden');
-            return;
+            document.getElementById('backups-loading').textContent = 'Could not load backups.';
         }
-
-        document.getElementById('progress-bar').style.width = pct[i] + '%';
     }
 
-    document.getElementById('init-status').textContent = '✅ Ready! Redirecting to dashboard…';
-    setTimeout(() => { window.location.href = '/'; }, 1000);
-}
-
-async function loadBackups() {
-    try {
-        const res = await fetch('/api/backups');
-        const json = await res.json();
-        document.getElementById('backups-loading').classList.add('hidden');
-
-        const backups = json.success ? json.data : [];
-        if (!backups.length) {
-            document.getElementById('backups-empty').classList.remove('hidden');
-            return;
+    async function restoreBackup(filename) {
+        if (!confirm(`Restore backup "${filename}"? Current data will be replaced.`)) return;
+        try {
+            const res = await fetch(`/api/backups/restore/${encodeURIComponent(filename)}`, { method: 'POST' });
+            const json = await res.json();
+            if (json.success) {
+                showToast('Backup restored — reloading…', 'success');
+                setTimeout(() => window.location.reload(), 1000);
+            } else {
+                showToast(json.error || 'Restore failed', 'error');
+            }
+        } catch (e) {
+            showToast('Network error', 'error');
         }
-
-        document.getElementById('backups-container').classList.remove('hidden');
-        document.getElementById('backups-tbody').innerHTML = backups.map(b => `
-            <tr>
-                <td style="font-family:monospace;font-size:0.8rem">${esc(b.filename)}</td>
-                <td>${formatDate(b.created)}</td>
-                <td>${(b.size_bytes / 1024).toFixed(1)} KB</td>
-                <td>
-                    <button class="btn btn-sm btn-secondary" onclick="restoreBackup('${esc(b.filename)}')">
-                        ↩ Restore
-                    </button>
-                </td>
-            </tr>
-        `).join('');
-    } catch (e) {
-        document.getElementById('backups-loading').textContent = 'Could not load backups.';
     }
-}
-
-async function restoreBackup(filename) {
-    if (!confirm(`Restore backup "${filename}"? Current data will be replaced.`)) return;
-    try {
-        const res = await fetch(`/api/backups/restore/${encodeURIComponent(filename)}`, { method: 'POST' });
-        const json = await res.json();
-        if (json.success) {
-            showToast('Backup restored — reloading…', 'success');
-            setTimeout(() => window.location.reload(), 1000);
-        } else {
-            showToast(json.error || 'Restore failed', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
-}
-
-function esc(text) {
-    if (!text) return '';
-    const d = document.createElement('div');
-    d.textContent = text;
-    return d.innerHTML;
-}
-</script>
-{% endblock %}
+    </script>
+</body>
+</html>

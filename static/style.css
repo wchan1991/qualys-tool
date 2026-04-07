@@ -1004,3 +1004,135 @@ body {
     border-color: var(--accent);
     color: #fff;
 }
+
+/* ── FullCalendar dark-mode fixes (F23) ─────────────────────────
+   FullCalendar v6 ships hard-coded dark text that becomes unreadable
+   on our dark card background. These overrides are scoped to
+   [data-theme="dark"] so light mode is untouched. */
+[data-theme="dark"] .fc {
+    color: var(--text-primary);
+}
+[data-theme="dark"] .fc-col-header-cell-cushion,
+[data-theme="dark"] .fc-daygrid-day-number,
+[data-theme="dark"] .fc-list-day-text,
+[data-theme="dark"] .fc-list-day-side-text,
+[data-theme="dark"] .fc-toolbar-title,
+[data-theme="dark"] .fc-button {
+    color: var(--text-primary) !important;
+}
+[data-theme="dark"] .fc-theme-standard td,
+[data-theme="dark"] .fc-theme-standard th,
+[data-theme="dark"] .fc-theme-standard .fc-scrollgrid {
+    border-color: var(--border-color, var(--border, #444)) !important;
+}
+[data-theme="dark"] .fc-daygrid-day.fc-day-today {
+    background: rgba(59, 130, 246, 0.12) !important;
+}
+[data-theme="dark"] .fc-event,
+[data-theme="dark"] .fc-event-title,
+[data-theme="dark"] .fc-event-time,
+[data-theme="dark"] .fc-event-main {
+    color: #ffffff !important;
+}
+[data-theme="dark"] .fc-list-event-title,
+[data-theme="dark"] .fc-list-event-time,
+[data-theme="dark"] .fc-list-event-graphic {
+    color: var(--text-primary) !important;
+}
+[data-theme="dark"] .fc-list-event:hover td {
+    background: var(--bg-secondary) !important;
+}
+[data-theme="dark"] .fc-button-primary {
+    background: var(--bg-secondary) !important;
+    border-color: var(--border-color, #444) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="dark"] .fc-button-primary:hover {
+    background: var(--bg-primary) !important;
+}
+[data-theme="dark"] .fc-button-primary:not(:disabled).fc-button-active,
+[data-theme="dark"] .fc-button-primary:not(:disabled):active {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: #fff !important;
+}
+[data-theme="dark"] #calendar-wrap {
+    background: var(--bg-primary) !important;
+}
+
+/* ── Group-by-status row headers (F19) ────────────────────── */
+.group-header {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+}
+.group-header td {
+    padding: 10px 14px;
+    color: var(--text-primary);
+}
+.group-header:hover td {
+    background: var(--bg-primary);
+}
+.group-caret {
+    display: inline-block;
+    width: 14px;
+    text-align: center;
+    transition: transform 0.15s;
+}
+.group-collapsed {
+    display: none !important;
+}
+.group-count {
+    color: var(--text-muted);
+    font-weight: 400;
+    margin-left: 6px;
+}
+
+/* ── Clickable metric cards (F25) ─────────────────────────── */
+.metric-clickable {
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.metric-clickable:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+    border-color: var(--accent, #3b82f6);
+}
+.metric-clickable:active {
+    transform: translateY(0);
+}
+
+/* ── Dropdown / overflow menu (F18) ───────────────────────── */
+.dropdown {
+    position: relative;
+    display: inline-block;
+}
+.dropdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color, var(--border, #ddd));
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    padding: 4px;
+    z-index: 100;
+    min-width: 160px;
+}
+.dropdown-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-primary);
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+.dropdown-menu button:hover {
+    background: var(--bg-secondary);
+}

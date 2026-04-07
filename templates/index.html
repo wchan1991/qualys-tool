@@ -23,57 +23,63 @@
 </div>
 {% endif %}
 
-<!-- Scans Metrics (Feature 7: no Running/Queued) -->
-<h3 class="section-title">🔍 Recent Scans</h3>
+<!-- Scans Metrics (F25: clickable → Lookup pre-filtered) -->
+<h3 class="section-title">🔍 Non-Scheduled Scans</h3>
 <div class="metrics-grid" id="metrics">
-    <div class="metric-card">
-        <div class="metric-label">Total Recent</div>
+    <div class="metric-card metric-clickable" onclick="goToLookup('all')" title="View all scans in Lookup">
+        <div class="metric-label">Total Non-Scheduled</div>
         <div class="metric-value" id="metric-total">--</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-clickable" onclick="goToLookup('paused')" title="View paused scans in Lookup">
         <div class="metric-label">Paused</div>
         <div class="metric-value metric-warning" id="metric-paused">--</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-clickable" onclick="goToLookup('finished')" title="View finished scans in Lookup">
         <div class="metric-label">Finished</div>
         <div class="metric-value" id="metric-finished">--</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-clickable" onclick="goToLookup('error')" title="View failed scans in Lookup">
         <div class="metric-label">Failed</div>
         <div class="metric-value metric-danger" id="metric-failed">--</div>
     </div>
 </div>
 
-<!-- Scheduled Scans Metrics -->
+<!-- Scheduled Scans Metrics (F25: clickable) -->
 <h3 class="section-title">📅 Scheduled Scans</h3>
 <div class="metrics-grid" id="scheduled-metrics">
-    <div class="metric-card">
+    <div class="metric-card metric-clickable" onclick="goToLookup('all')" title="View all scheduled in Lookup">
         <div class="metric-label">Total Scheduled</div>
         <div class="metric-value" id="metric-scheduled-total">--</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-clickable" onclick="goToLookup('active')" title="View active scheduled in Lookup">
         <div class="metric-label">Active</div>
         <div class="metric-value metric-success" id="metric-scheduled-active">--</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-clickable" onclick="goToLookup('inactive')" title="View inactive scheduled in Lookup">
         <div class="metric-label">Inactive</div>
         <div class="metric-value metric-warning" id="metric-scheduled-inactive">--</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card" title="Not clickable — internal queue of staged changes">
         <div class="metric-label">Pending Changes</div>
         <div class="metric-value metric-info" id="metric-pending">--</div>
     </div>
 </div>
 
-<!-- 24h Traffic Chart (Feature 6) -->
+<!-- Scan Traffic / Forecast Chart (F6 + F20) -->
 <div class="card" style="margin-bottom:24px">
-    <div class="card-header">
-        <h2>📈 24h Scan Launch Traffic</h2>
+    <div class="card-header" style="flex-wrap:wrap;gap:0.5rem">
+        <h2 id="chart-title">📈 Scan Activity — Past 24 hours</h2>
+        <div class="chart-mode-toggle" style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn btn-sm btn-primary chart-mode-btn active" data-mode="past" onclick="loadTrafficChart('past')">Past 24h</button>
+            <button class="btn btn-sm btn-secondary chart-mode-btn" data-mode="24" onclick="loadTrafficChart('24')">Next 24h</button>
+            <button class="btn btn-sm btn-secondary chart-mode-btn" data-mode="48" onclick="loadTrafficChart('48')">Next 48h</button>
+            <button class="btn btn-sm btn-secondary chart-mode-btn" data-mode="72" onclick="loadTrafficChart('72')">Next 72h</button>
+        </div>
     </div>
     <div class="card-body">
         <canvas id="traffic-chart" height="80"></canvas>
         <div id="traffic-empty" class="text-muted text-center" style="display:none;padding:1rem">
-            No scan launches in the last 24 hours.
+            No scan launches in the selected window.
         </div>
     </div>
 </div>
@@ -81,7 +87,7 @@
 <!-- Recent Scans table -->
 <div class="card" style="margin-bottom:24px">
     <div class="card-header">
-        <h2>Recent Scans</h2>
+        <h2>Recent Scans (last 6 hours)</h2>
         <a href="{{ url_for('scans_page') }}" class="btn btn-secondary btn-sm">View All →</a>
     </div>
     <div class="card-body">
@@ -132,12 +138,18 @@
 {% block scripts %}
 <script>
 let _trafficChart = null;
+let _chartMode = 'past';  // 'past' | '24' | '48' | '72'
+
+// F25: navigate to the lookup page with a status pre-applied
+function goToLookup(status) {
+    window.location.href = `/lookup?type=status&value=${encodeURIComponent(status)}`;
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
     loadRecentScans();
     loadUpcomingScans();
-    loadTrafficChart();
+    loadTrafficChart('past');
 });
 
 async function loadDashboard() {
@@ -160,31 +172,58 @@ async function loadDashboard() {
     }
 }
 
-async function loadTrafficChart() {
+async function loadTrafficChart(mode = 'past') {
+    _chartMode = mode;
+    // Toggle active button state
+    document.querySelectorAll('.chart-mode-btn').forEach(btn => {
+        const active = btn.dataset.mode === mode;
+        btn.classList.toggle('active', active);
+        btn.classList.toggle('btn-primary', active);
+        btn.classList.toggle('btn-secondary', !active);
+    });
+
+    const titles = {
+        past: '📈 Scan Activity — Past 24 hours',
+        '24': '📈 Scan Activity — Next 24 hours (forecast)',
+        '48': '📈 Scan Activity — Next 48 hours (forecast)',
+        '72': '📈 Scan Activity — Next 72 hours (forecast)',
+    };
+    document.getElementById('chart-title').textContent = titles[mode] || titles.past;
+
+    const emptyEl = document.getElementById('traffic-empty');
+    emptyEl.style.display = 'none';
+
+    const url = mode === 'past'
+        ? '/api/dashboard/traffic'
+        : `/api/dashboard/forecast?hours=${encodeURIComponent(mode)}`;
+
     try {
-        const res = await fetch('/api/dashboard/traffic');
+        const res = await fetch(url);
         const json = await res.json();
         if (!json.success) return;
-        const data = json.data;
-        const total = data.reduce((s, d) => s + d.count, 0);
-        if (total === 0) {
-            document.getElementById('traffic-empty').style.display = '';
+        const data = json.data || [];
+        const total = data.reduce((s, d) => s + (d.count || 0), 0);
+        if (_trafficChart) { _trafficChart.destroy(); _trafficChart = null; }
+        if (total === 0 || !data.length) {
+            emptyEl.style.display = '';
             return;
         }
         const labels = data.map(d => d.hour);
         const counts = data.map(d => d.count);
+        const isForecast = mode !== 'past';
+        const label = isForecast ? 'Scheduled launches' : 'Scans launched';
         const ctx = document.getElementById('traffic-chart').getContext('2d');
-        if (_trafficChart) _trafficChart.destroy();
+
         _trafficChart = new Chart(ctx, {
-            type: 'line',
+            type: isForecast ? 'bar' : 'line',
             data: {
                 labels,
                 datasets: [{
-                    label: 'Scans launched',
+                    label,
                     data: counts,
-                    borderColor: '#3b82f6',
-                    backgroundColor: 'rgba(59,130,246,0.12)',
-                    fill: true,
+                    borderColor: isForecast ? '#16a34a' : '#3b82f6',
+                    backgroundColor: isForecast ? 'rgba(22,163,74,0.5)' : 'rgba(59,130,246,0.12)',
+                    fill: !isForecast,
                     tension: 0.3,
                     pointRadius: 3,
                 }]
@@ -194,7 +233,14 @@ async function loadTrafficChart() {
                 plugins: { legend: { display: false } },
                 scales: {
                     y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } },
-                    x: { ticks: { maxRotation: 45, minRotation: 0 } }
+                    x: {
+                        ticks: {
+                            autoSkip: true,
+                            maxTicksLimit: mode === '72' ? 24 : (mode === '48' ? 16 : 12),
+                            maxRotation: 45,
+                            minRotation: 0,
+                        }
+                    }
                 }
             }
         });
@@ -205,14 +251,15 @@ async function loadTrafficChart() {
 
 async function loadRecentScans() {
     try {
-        const res = await fetch('/api/scans');
+        // F13: "recent" on the Dashboard now means "last 6 hours"
+        const res = await fetch('/api/scans/recent?hours=6');
         const json = await res.json();
         const tbody = document.getElementById('recent-scans');
-        if (!json.success || !json.data.length) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No scans found. Click Refresh to fetch from Qualys.</td></tr>';
+        if (!json.success || !json.data || !json.data.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No scans launched in the last 6 hours.</td></tr>';
             return;
         }
-        const scans = json.data.slice(0, 5);
+        const scans = json.data.slice(0, 10);
         tbody.innerHTML = scans.map(scan => `
             <tr>
                 <td><span class="status-badge status-${(scan.status||'').toLowerCase()}">${escapeHtml(scan.status)}</span></td>
@@ -272,7 +319,7 @@ async function refreshAll() {
             loadDashboard();
             loadRecentScans();
             loadUpcomingScans();
-            loadTrafficChart();
+            loadTrafficChart(_chartMode);
         } else {
             showToast(json.error || 'Refresh failed', 'error');
         }

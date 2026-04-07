@@ -13,22 +13,57 @@
 </div>
 
 <div class="filter-bar">
-    <input type="text" id="search-input" class="search-input" 
+    <input type="text" id="search-input" class="search-input"
            placeholder="Search by title, target, or owner..." oninput="filterScans()">
     <select id="status-filter" class="filter-select" onchange="filterScans()">
         <option value="">All Status</option>
         <option value="active">Active</option>
+        <option value="paused">Paused</option>
         <option value="inactive">Inactive</option>
+    </select>
+    <select id="group-by" class="filter-select" onchange="onGroupByChange()">
+        <option value="status">Group by Status</option>
+        <option value="">No grouping</option>
     </select>
 </div>
 
-<!-- Bulk action bar -->
+<!-- Bulk action bar. F18: Change Profile becomes a primary action,
+     Delete is moved into the overflow menu. -->
 <div id="bulk-bar" class="bulk-bar hidden">
     <span class="bulk-count" id="bulk-count">0 selected</span>
     <button class="btn btn-sm btn-success" onclick="bulkAction('activate')">▶ Activate</button>
     <button class="btn btn-sm btn-warning" onclick="bulkAction('deactivate')">⏸ Deactivate</button>
-    <button class="btn btn-sm btn-danger" onclick="bulkAction('delete')">🗑️ Delete</button>
+    <button class="btn btn-sm btn-primary" onclick="openProfileModal()">🔧 Change Profile</button>
+    <div class="dropdown">
+        <button class="btn btn-sm btn-secondary"
+                data-dropdown="bulk-overflow-sched"
+                onclick="toggleDropdown('bulk-overflow-sched')">⋮ More</button>
+        <div id="bulk-overflow-sched" class="dropdown-menu hidden">
+            <button onclick="bulkAction('delete')">🗑 Delete</button>
+        </div>
+    </div>
     <button class="btn btn-sm btn-secondary" onclick="clearSelection()">✕ Clear</button>
+</div>
+
+<!-- F18: Change Profile modal -->
+<div id="profile-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Change Option Profile</h3>
+            <button class="modal-close" onclick="closeProfileModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Apply to <span id="profile-target-count">0</span> selected scheduled scan(s).</p>
+            <label for="profile-select">New Option Profile:</label>
+            <select id="profile-select" class="input"></select>
+            <label for="profile-reason" style="margin-top:8px">Reason (optional):</label>
+            <textarea id="profile-reason" rows="2" placeholder="Why are you making this change?"></textarea>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeProfileModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmProfileChange()">Stage Changes</button>
+        </div>
+    </div>
 </div>
 
 <div id="scans-container" class="table-container">
@@ -85,9 +120,32 @@
 <script>
     let allScans = [];
     let currentAction = null;
-    
+
+    // ── F19: Group-by-status support ──
+    const SCHED_GROUP_ORDER = ['active', 'paused', 'inactive'];
+    const SCHED_GROUP_LABELS = {
+        active: '✓ Active',
+        paused: '⏸ Paused',
+        inactive: '○ Inactive',
+    };
+    const collapsedGroupsSched = new Set();
+
+    function schedGroupKey(scan) {
+        const status = (scan.status || '').toLowerCase();
+        if (status === 'active' || status === 'paused' || status === 'inactive') return status;
+        // Fallback to boolean `active` for DBs not yet migrated to the
+        // tri-state column (Phase 5 — F21).
+        return scan.active ? 'active' : 'inactive';
+    }
+
     // Load scans on page load
-    document.addEventListener('DOMContentLoaded', loadScans);
+    document.addEventListener('DOMContentLoaded', () => {
+        const saved = localStorage.getItem('groupBy.scheduled');
+        if (saved !== null) {
+            document.getElementById('group-by').value = saved;
+        }
+        loadScans();
+    });
     
     async function loadScans() {
         try {
@@ -128,22 +186,16 @@
         }
     }
     
-    function renderScans(scans) {
-        const tbody = document.getElementById('scans-tbody');
-        const emptyState = document.getElementById('empty-state');
-        const container = document.getElementById('scans-container');
-        
-        if (scans.length === 0) {
-            container.classList.add('hidden');
-            emptyState.classList.remove('hidden');
-            return;
-        }
-        
-        container.classList.remove('hidden');
-        emptyState.classList.add('hidden');
-        
-        tbody.innerHTML = scans.map(scan => `
-            <tr data-id="${scan.id}">
+    function schedRowHTML(scan) {
+        const key = schedGroupKey(scan);
+        const badgeClass =
+            key === 'active' ? 'status-active' :
+            key === 'paused' ? 'status-paused' : 'status-inactive';
+        const badgeText =
+            key === 'active' ? '✓ Active' :
+            key === 'paused' ? '⏸ Paused' : '○ Inactive';
+        return `
+            <tr data-id="${scan.id}" class="sched-row">
                 <td><input type="checkbox" class="row-cb" data-id="${escapeHtml(scan.id)}" data-title="${escapeHtml(scan.title || '')}" onchange="onCheckboxChange()"></td>
                 <td>
                     <a href="/scheduled/${encodeURIComponent(scan.id)}"><strong>${escapeHtml(scan.title || 'Untitled')}</strong></a>
@@ -154,15 +206,85 @@
                 <td>${formatDate(scan.next_launch)}</td>
                 <td>${formatDate(scan.last_launch)}</td>
                 <td>
-                    <span class="status-badge ${scan.active ? 'status-active' : 'status-inactive'}">
-                        ${scan.active ? '✓ Active' : '○ Inactive'}
+                    <span class="status-badge ${badgeClass}">
+                        ${badgeText}
                     </span>
                 </td>
                 <td class="actions-cell">
                     ${getActionButtons(scan)}
                 </td>
             </tr>
-        `).join('');
+        `;
+    }
+
+    function renderScans(scans) {
+        const tbody = document.getElementById('scans-tbody');
+        const emptyState = document.getElementById('empty-state');
+        const container = document.getElementById('scans-container');
+
+        if (scans.length === 0) {
+            container.classList.add('hidden');
+            emptyState.classList.remove('hidden');
+            return;
+        }
+
+        container.classList.remove('hidden');
+        emptyState.classList.add('hidden');
+
+        const groupBy = document.getElementById('group-by').value;
+
+        if (groupBy !== 'status') {
+            tbody.innerHTML = scans.map(schedRowHTML).join('');
+            return;
+        }
+
+        // Bucket by derived status
+        const buckets = { active: [], paused: [], inactive: [] };
+        scans.forEach(s => {
+            const key = schedGroupKey(s);
+            (buckets[key] || buckets.inactive).push(s);
+        });
+
+        const html = [];
+        for (const key of SCHED_GROUP_ORDER) {
+            const bucket = buckets[key];
+            if (!bucket.length) continue;
+            const collapsed = collapsedGroupsSched.has(key);
+            const caret = collapsed ? '▸' : '▾';
+            html.push(`
+                <tr class="group-header" data-group="${key}" onclick="toggleSchedGroup('${key}')">
+                    <td colspan="8">
+                        <span class="group-caret">${caret}</span>
+                        ${escapeHtml(SCHED_GROUP_LABELS[key])}
+                        <span class="group-count">(${bucket.length})</span>
+                    </td>
+                </tr>
+            `);
+            for (const s of bucket) {
+                const rowHtml = schedRowHTML(s);
+                html.push(rowHtml.replace(
+                    'class="sched-row"',
+                    `class="sched-row group-row group-${key}${collapsed ? ' group-collapsed' : ''}"`
+                ));
+            }
+        }
+        tbody.innerHTML = html.join('');
+    }
+
+    function toggleSchedGroup(key) {
+        if (collapsedGroupsSched.has(key)) {
+            collapsedGroupsSched.delete(key);
+        } else {
+            collapsedGroupsSched.add(key);
+        }
+        filterScans();
+    }
+
+    function onGroupByChange() {
+        const v = document.getElementById('group-by').value;
+        localStorage.setItem('groupBy.scheduled', v);
+        collapsedGroupsSched.clear();
+        filterScans();
     }
     
     function getActionButtons(scan) {
@@ -215,7 +337,7 @@
     
     function filterScans() {
         const searchTerm = document.getElementById('search-input').value.toLowerCase();
-        const statusFilter = document.getElementById('status-filter').value;
+        const statusFilter = document.getElementById('status-filter').value.toLowerCase();
 
         const filtered = allScans.filter(scan => {
             const matchesSearch = !searchTerm ||
@@ -223,9 +345,8 @@
                 (scan.target || '').toLowerCase().includes(searchTerm) ||
                 (scan.owner || '').toLowerCase().includes(searchTerm);
 
-            const matchesStatus = !statusFilter ||
-                (statusFilter === 'active' && scan.active) ||
-                (statusFilter === 'inactive' && !scan.active);
+            const key = schedGroupKey(scan);
+            const matchesStatus = !statusFilter || key === statusFilter;
 
             return matchesSearch && matchesStatus;
         });
@@ -254,6 +375,80 @@
         const sa = document.getElementById('select-all');
         if (sa) { sa.checked = false; sa.indeterminate = false; }
         document.getElementById('bulk-bar').classList.add('hidden');
+    }
+
+    // ── F18: Change Option Profile modal ──────────────────────
+    async function openProfileModal() {
+        const checked = document.querySelectorAll('.row-cb:checked');
+        if (!checked.length) {
+            showToast('Select at least one scan first', 'error');
+            return;
+        }
+        document.getElementById('profile-target-count').textContent = checked.length;
+        const sel = document.getElementById('profile-select');
+        sel.innerHTML = '<option value="">Loading…</option>';
+        document.getElementById('profile-reason').value = '';
+        document.getElementById('profile-modal').classList.remove('hidden');
+
+        try {
+            const res = await fetch('/api/target-sources');
+            const json = await res.json();
+            const profiles = (json.success && json.data && json.data.option_profiles) || [];
+            if (!profiles.length) {
+                sel.innerHTML = '<option value="">No profiles available</option>';
+                return;
+            }
+            sel.innerHTML = profiles
+                .map(p => {
+                    const label = p.title || p.id || '(unnamed)';
+                    return `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`;
+                })
+                .join('');
+        } catch (e) {
+            sel.innerHTML = '<option value="">Failed to load profiles</option>';
+        }
+    }
+
+    function closeProfileModal() {
+        document.getElementById('profile-modal').classList.add('hidden');
+    }
+
+    async function confirmProfileChange() {
+        const checked = Array.from(document.querySelectorAll('.row-cb:checked'));
+        const profile = document.getElementById('profile-select').value;
+        const reason = document.getElementById('profile-reason').value;
+        if (!checked.length || !profile) {
+            closeProfileModal();
+            return;
+        }
+        const changes = checked.map(cb => ({
+            action: 'modify_option_profile',
+            scan_ref: cb.dataset.id,
+            option_profile: profile,
+            title: cb.dataset.title || '',
+            reason,
+        }));
+        try {
+            const res = await fetch('/api/stage/bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ changes }),
+            });
+            const json = await res.json();
+            if (json.success) {
+                showToast(`Staged ${json.data.staged} profile changes`, 'success');
+                closeProfileModal();
+                clearSelection();
+                updateStagingBadge();
+                if (json.data.failed && json.data.failed.length) {
+                    console.warn('Some profile changes failed:', json.data.failed);
+                }
+            } else {
+                showToast(json.error || 'Bulk profile change failed', 'error');
+            }
+        } catch (e) {
+            showToast('Network error', 'error');
+        }
     }
 
     async function bulkAction(action) {

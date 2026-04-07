@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}Recent Scans - Qualys Scan Manager{% endblock %}
+{% block title %}Non-Scheduled Scans - Qualys Scan Manager{% endblock %}
 
 {% block content %}
 <div class="page-header">
-    <h1>🔍 Recent Scans</h1>
-    <p class="page-description">Scans that have run or are currently running</p>
+    <h1>🏎️ Non-Scheduled Scans</h1>
+    <p class="page-description">All scans launched on-demand or currently running</p>
     <div class="header-actions">
         <input type="text" id="search-input" class="input" placeholder="Search scans..." oninput="filterScans()">
         <select id="status-filter" class="input" onchange="filterScans()">
@@ -15,6 +15,10 @@
             <option value="queued">Queued</option>
             <option value="finished">Finished</option>
         </select>
+        <select id="group-by" class="input" onchange="onGroupByChange()">
+            <option value="status">Group by Status</option>
+            <option value="">No grouping</option>
+        </select>
         <a href="/scans/new" class="btn btn-success">+ Launch Scan</a>
         <button id="refresh-btn" class="btn btn-primary" onclick="refreshScans()">
             🔄 Refresh
@@ -22,12 +26,20 @@
     </div>
 </div>
 
-<!-- Bulk action bar (hidden until rows selected) -->
+<!-- Bulk action bar (hidden until rows selected). F18: Cancel is tucked
+     into an overflow menu so the primary actions stay prominent. -->
 <div id="bulk-bar" class="bulk-bar hidden">
     <span class="bulk-count" id="bulk-count">0 selected</span>
     <button class="btn btn-sm btn-warning" onclick="bulkAction('pause')">⏸ Pause</button>
     <button class="btn btn-sm btn-success" onclick="bulkAction('resume')">▶ Resume</button>
-    <button class="btn btn-sm btn-danger" onclick="bulkAction('cancel')">⏹ Cancel</button>
+    <div class="dropdown">
+        <button class="btn btn-sm btn-secondary"
+                data-dropdown="bulk-overflow-scans"
+                onclick="toggleDropdown('bulk-overflow-scans')">⋮ More</button>
+        <div id="bulk-overflow-scans" class="dropdown-menu hidden">
+            <button onclick="bulkAction('cancel')">⏹ Cancel</button>
+        </div>
+    </div>
     <button class="btn btn-sm btn-secondary" onclick="clearSelection()">✕ Clear</button>
 </div>
 
@@ -49,7 +61,7 @@
                 </thead>
                 <tbody id="scans-tbody">
                     <tr>
-                        <td colspan="8" class="text-muted text-center">Loading...</td>
+                        <td colspan="8" class="text-muted text-center">Loading…</td>
                     </tr>
                 </tbody>
             </table>
@@ -84,7 +96,26 @@
 <script>
 let allScans = [];
 
-document.addEventListener('DOMContentLoaded', loadScans);
+// ── F19: Group-by-status support ──
+const SCANS_GROUP_ORDER = ['running', 'paused', 'queued', 'finished', 'error', 'canceled', 'other'];
+const SCANS_GROUP_LABELS = {
+    running: '🟢 Running',
+    paused: '⏸ Paused',
+    queued: '⏳ Queued',
+    finished: '✅ Finished',
+    error: '❌ Error',
+    canceled: '⏹ Canceled',
+    other: '❔ Other',
+};
+const collapsedGroupsScans = new Set();
+
+document.addEventListener('DOMContentLoaded', () => {
+    const saved = localStorage.getItem('groupBy.scans');
+    if (saved !== null) {
+        document.getElementById('group-by').value = saved;
+    }
+    loadScans();
+});
 
 async function loadScans() {
     try {
@@ -94,62 +125,126 @@ async function loadScans() {
         const tbody = document.getElementById('scans-tbody');
         
         if (!json.success || !json.data.length) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center">No scans found. Click Refresh to fetch from Qualys.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">No scans found. Click Refresh to fetch from Qualys.</td></tr>';
             return;
         }
-        
+
         allScans = json.data;
         renderScans(allScans);
-        
+
     } catch (e) {
         console.error('Failed to load scans:', e);
-        document.getElementById('scans-tbody').innerHTML = 
-            '<tr><td colspan="7" class="text-danger text-center">Failed to load scans</td></tr>';
+        document.getElementById('scans-tbody').innerHTML =
+            '<tr><td colspan="8" class="text-danger text-center">Failed to load scans</td></tr>';
     }
+}
+
+function scanRowHTML(scan) {
+    const status = scan.status?.toLowerCase() || 'unknown';
+    const tags = (scan.tags || []).slice(0, 3).map(t =>
+        `<span class="tag">${escapeHtml(t)}</span>`
+    ).join('');
+
+    let actions = '';
+    if (status === 'running') {
+        actions = `
+            <button class="btn btn-sm btn-warning" onclick="openStageModal('pause', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Pause</button>
+            <button class="btn btn-sm btn-danger" onclick="openStageModal('cancel', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Cancel</button>
+        `;
+    } else if (status === 'paused') {
+        actions = `
+            <button class="btn btn-sm btn-success" onclick="openStageModal('resume', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Resume</button>
+        `;
+    }
+
+    return `
+        <tr data-status="${status}" class="scan-row">
+            <td><input type="checkbox" class="row-cb" data-ref="${escapeHtml(scan.ref)}" data-status="${status}" onchange="onCheckboxChange()"></td>
+            <td><span class="status-badge status-${status}">${escapeHtml(scan.status)}</span></td>
+            <td>
+                <a href="/scans/${encodeURIComponent(scan.ref)}"><div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div></a>
+                <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>
+            </td>
+            <td>${escapeHtml(scan.target || '')}</td>
+            <td>${escapeHtml(scan.type || '')}</td>
+            <td>${tags}</td>
+            <td>${formatDate(scan.launched)}</td>
+            <td class="actions-cell">${actions}</td>
+        </tr>
+    `;
+}
+
+function groupKeyForScan(scan) {
+    const status = (scan.status || '').toLowerCase();
+    if (SCANS_GROUP_ORDER.includes(status)) return status;
+    return 'other';
 }
 
 function renderScans(scans) {
     const tbody = document.getElementById('scans-tbody');
-    
+
     if (!scans.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center">No matching scans</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">No matching scans</td></tr>';
         return;
     }
-    
-    tbody.innerHTML = scans.map(scan => {
-        const status = scan.status?.toLowerCase() || 'unknown';
-        const tags = (scan.tags || []).slice(0, 3).map(t =>
-            `<span class="tag">${escapeHtml(t)}</span>`
-        ).join('');
 
-        let actions = '';
-        if (status === 'running') {
-            actions = `
-                <button class="btn btn-sm btn-warning" onclick="openStageModal('pause', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Pause</button>
-                <button class="btn btn-sm btn-danger" onclick="openStageModal('cancel', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Cancel</button>
-            `;
-        } else if (status === 'paused') {
-            actions = `
-                <button class="btn btn-sm btn-success" onclick="openStageModal('resume', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Resume</button>
-            `;
-        }
+    const groupBy = document.getElementById('group-by').value;
 
-        return `
-            <tr data-status="${status}">
-                <td><input type="checkbox" class="row-cb" data-ref="${escapeHtml(scan.ref)}" data-status="${status}" onchange="onCheckboxChange()"></td>
-                <td><span class="status-badge status-${status}">${escapeHtml(scan.status)}</span></td>
-                <td>
-                    <a href="/scans/${encodeURIComponent(scan.ref)}"><div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div></a>
-                    <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>
+    if (groupBy !== 'status') {
+        tbody.innerHTML = scans.map(scanRowHTML).join('');
+        return;
+    }
+
+    // Bucket by status
+    const buckets = {};
+    for (const key of SCANS_GROUP_ORDER) buckets[key] = [];
+    scans.forEach(s => {
+        buckets[groupKeyForScan(s)].push(s);
+    });
+
+    const html = [];
+    for (const key of SCANS_GROUP_ORDER) {
+        const bucket = buckets[key];
+        if (!bucket.length) continue;
+        const collapsed = collapsedGroupsScans.has(key);
+        const caret = collapsed ? '▸' : '▾';
+        html.push(`
+            <tr class="group-header" data-group="${key}" onclick="toggleScansGroup('${key}')">
+                <td colspan="8">
+                    <span class="group-caret">${caret}</span>
+                    ${escapeHtml(SCANS_GROUP_LABELS[key] || key)}
+                    <span class="group-count">(${bucket.length})</span>
                 </td>
-                <td>${escapeHtml(scan.target || '')}</td>
-                <td>${escapeHtml(scan.type || '')}</td>
-                <td>${tags}</td>
-                <td>${formatDate(scan.launched)}</td>
-                <td class="actions-cell">${actions}</td>
             </tr>
-        `;
-    }).join('');
+        `);
+        for (const s of bucket) {
+            // Wrap the row HTML so we can tag it with group classes
+            const rowHtml = scanRowHTML(s);
+            const tagged = rowHtml.replace(
+                'class="scan-row"',
+                `class="scan-row group-row group-${key}${collapsed ? ' group-collapsed' : ''}"`
+            );
+            html.push(tagged);
+        }
+    }
+    tbody.innerHTML = html.join('');
+}
+
+function toggleScansGroup(key) {
+    if (collapsedGroupsScans.has(key)) {
+        collapsedGroupsScans.delete(key);
+    } else {
+        collapsedGroupsScans.add(key);
+    }
+    // Re-render to refresh caret + collapsed class
+    filterScans();
+}
+
+function onGroupByChange() {
+    const v = document.getElementById('group-by').value;
+    localStorage.setItem('groupBy.scans', v);
+    collapsedGroupsScans.clear();
+    filterScans();
 }
 
 function filterScans() {

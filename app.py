@@ -13,6 +13,7 @@ connections, making it safe to use with Flask's threaded mode.
 import shutil
 import sys
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
@@ -80,6 +81,18 @@ def get_manager() -> ScanManager:
 
 _startup_done = False
 
+# Init gate (F22): block non-init routes while first refresh is running
+_init_lock = threading.Lock()
+_init_in_progress = False
+
+_ALLOWED_DURING_INIT = {
+    "/init",
+    "/api/health",
+    "/api/refresh-all",
+    "/api/target-sources",
+    "/api/backups",
+}
+
 
 def _perform_startup_backup() -> None:
     """Copy the live DB to data/backups/ before clearing it."""
@@ -100,15 +113,38 @@ def _perform_startup_backup() -> None:
 @app.before_request
 def run_startup():
     """Back up then clear scan data on first request after each app launch."""
-    global _startup_done
+    global _startup_done, _init_in_progress
     if not _startup_done:
         _startup_done = True
         _perform_startup_backup()
         try:
             get_manager().db.clear_scan_data()
             logger.info("Scan data cleared for fresh session")
+            # Arm the init gate — will be released when /api/refresh-all completes
+            with _init_lock:
+                _init_in_progress = True
         except Exception as e:
             logger.warning(f"Could not clear scan data on startup: {e}")
+
+
+@app.before_request
+def gate_during_init():
+    """
+    While init is in progress, redirect non-essential routes to /init.
+
+    Prevents a user who bookmarks /scheduled (etc.) from landing on a
+    half-populated page during the first refresh after launch.
+    """
+    if not _init_in_progress:
+        return
+    path = request.path or ""
+    # Always allow the init page itself, static assets, and the APIs it calls
+    if path in _ALLOWED_DURING_INIT or path.startswith("/static/") or path.startswith("/api/backups/"):
+        return
+    # For JSON API callers: respond with JSON instead of a redirect
+    if path.startswith("/api/"):
+        return jsonify({"success": False, "error": "Initialization in progress"}), 503
+    return redirect(url_for("init_page"))
 
 
 def api_response(f):
@@ -491,9 +527,16 @@ def api_scheduled_debug():
 @api_response
 def api_refresh_all():
     """Refresh both running and scheduled scans from Qualys API."""
+    global _init_in_progress
     manager = get_manager()
-    counts = manager.refresh_all()
-    return counts
+    try:
+        counts = manager.refresh_all()
+        return counts
+    finally:
+        # Release the init gate regardless of success/failure so the user
+        # can navigate (and a failed init still lets them click Retry).
+        with _init_lock:
+            _init_in_progress = False
 
 
 # ============================================================
@@ -513,6 +556,19 @@ def api_stage_bulk():
     staged = 0
     failed = []
 
+    # F18: cache scheduled-scan list once so modify_option_profile lookups
+    # don't hit the DB per row.
+    _sched_cache = None
+
+    def _sched_by_id(scan_id: str):
+        nonlocal _sched_cache
+        if _sched_cache is None:
+            _sched_cache = {
+                s.get("id") or s.get("scan_id"): s
+                for s in (manager.get_scheduled_scans() or [])
+            }
+        return _sched_cache.get(scan_id)
+
     for item in changes:
         action = item.get("action", "")
         scan_ref = item.get("scan_ref", "")
@@ -531,6 +587,19 @@ def api_stage_bulk():
                 manager.stage_deactivate(scan_ref, title, reason)
             elif action == "delete":
                 manager.stage_delete_scheduled(scan_ref, title, reason)
+            elif action == "modify_option_profile":
+                new_profile = (item.get("option_profile") or "").strip()
+                if not new_profile:
+                    raise ValueError("option_profile required")
+                current = _sched_by_id(scan_ref)
+                if not current:
+                    raise ValueError(f"Scheduled scan {scan_ref} not found")
+                manager.stage_modify_scheduled(
+                    scan_id=scan_ref,
+                    current=current,
+                    changes={"option_profile": new_profile},
+                    reason=reason or f"Change option profile to {new_profile}",
+                )
             else:
                 raise ValueError(f"Unknown action: {action}")
             staged += 1
@@ -574,6 +643,20 @@ def api_lookup():
         raise ValueError("value query parameter is required")
     manager = get_manager()
     return manager.find_scans_using_target(target_type, target_value)
+
+
+@app.route("/api/scans/by-status")
+@api_response
+def api_scans_by_status():
+    """
+    F25: return scans that match a status, in the same shape as /api/lookup
+    ({scheduled: [...], recent: [...]}), so the lookup page's existing
+    renderer can display the results directly.
+    """
+    status = (request.args.get("status") or "").strip().lower()
+    if not status:
+        raise ValueError("status query parameter is required")
+    return get_manager().get_scans_by_status(status)
 
 
 # ============================================================
@@ -662,6 +745,38 @@ def api_dashboard_traffic():
     """Get 24-hour scan launch traffic for the dashboard chart."""
     manager = get_manager()
     return manager.db.get_scan_traffic_24h()
+
+
+@app.route("/api/dashboard/forecast")
+@api_response
+def api_dashboard_forecast():
+    """
+    F20: forecast scheduled scan launches for the next N hours (24, 48, 72).
+    Returns the same shape as /api/dashboard/traffic — a list of
+    {hour, count} buckets — so the dashboard chart can swap modes
+    without changing its rendering code.
+    """
+    try:
+        hours = int(request.args.get("hours", "24"))
+    except ValueError:
+        hours = 24
+    if hours not in (24, 48, 72):
+        hours = 24
+    return get_manager().get_launch_forecast(hours)
+
+
+@app.route("/api/scans/recent")
+@api_response
+def api_scans_recent():
+    """
+    F13: scans launched within the last N hours (default 6). Used by the
+    Dashboard "Recent Scans (last 6 hours)" panel.
+    """
+    try:
+        hours = int(request.args.get("hours", "6"))
+    except ValueError:
+        hours = 6
+    return get_manager().db.get_recent_scans(hours)
 
 
 # ============================================================

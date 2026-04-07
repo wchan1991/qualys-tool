@@ -142,14 +142,42 @@ document.addEventListener('DOMContentLoaded', () => {
     initTheme();
     checkConnection();
     updateStagingBadge();
-    
+
     // Theme toggle
     const themeBtn = document.getElementById('theme-toggle');
     if (themeBtn) {
         themeBtn.addEventListener('click', toggleTheme);
     }
-    
+
     // Refresh connection status periodically
     setInterval(checkConnection, 60000);
     setInterval(updateStagingBadge, 30000);
 });
+
+// ============================================================
+// DROPDOWN / OVERFLOW MENU (F18)
+// ============================================================
+
+function toggleDropdown(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const wasHidden = el.classList.contains('hidden');
+
+    // Close any other open dropdowns first
+    document.querySelectorAll('.dropdown-menu').forEach(menu => {
+        if (menu !== el) menu.classList.add('hidden');
+    });
+
+    el.classList.toggle('hidden');
+
+    if (wasHidden) {
+        // Attach a one-shot outside-click closer
+        const closer = (ev) => {
+            if (!el.contains(ev.target) && !ev.target.closest(`[data-dropdown="${id}"]`)) {
+                el.classList.add('hidden');
+                document.removeEventListener('click', closer);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closer), 0);
+    }
+}

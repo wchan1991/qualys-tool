@@ -422,6 +422,75 @@ class ScanManager:
         """
         return self.db.find_scans_by_target(target_type, target_value)
 
+    def get_scans_by_status(self, status: str) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        F25: return scans matching a status, in the same shape as
+        find_scans_by_target so the lookup page can render them.
+
+        Supported values:
+          - Non-scheduled scan states: running, paused, queued, finished,
+            canceled, error ("failed" is aliased to error).
+          - Scheduled scan states: active, paused, inactive.
+          - "all": every non-scheduled and scheduled scan.
+        """
+        status = (status or "").lower().strip()
+        if status == "failed":
+            status = "error"
+
+        scheduled_out: List[Dict[str, Any]] = []
+        recent_out: List[Dict[str, Any]] = []
+
+        scans = self.get_scans() or []
+        scheduled = self.get_scheduled_scans() or []
+
+        if status == "all":
+            recent_matches = scans
+            scheduled_matches = scheduled
+        elif status in ("active", "inactive"):
+            scheduled_matches = [
+                s for s in scheduled
+                if (s.get("status") or ("active" if s.get("active") else "inactive")) == status
+            ]
+            recent_matches = []
+        elif status == "paused":
+            # "paused" exists for both scheduled and non-scheduled states
+            scheduled_matches = [
+                s for s in scheduled
+                if (s.get("status") or "").lower() == "paused"
+            ]
+            recent_matches = [
+                s for s in scans if (s.get("status") or "").lower() == "paused"
+            ]
+        else:
+            scheduled_matches = []
+            recent_matches = [
+                s for s in scans if (s.get("status") or "").lower() == status
+            ]
+
+        for s in scheduled_matches:
+            sid = s.get("id") or s.get("scan_id") or ""
+            scheduled_out.append({
+                "scan_id": sid,
+                "title": s.get("title"),
+                "active": bool(s.get("active")),
+                "status": s.get("status") or ("active" if s.get("active") else "inactive"),
+                "owner": s.get("owner"),
+                "target": s.get("target"),
+                "matched_target": f"status:{status}",
+            })
+
+        for r in recent_matches:
+            recent_out.append({
+                "ref": r.get("ref"),
+                "title": r.get("title"),
+                "status": r.get("status"),
+                "owner": None,
+                "target": r.get("target"),
+                "matched_target": f"status:{status}",
+            })
+
+        return {"scheduled": scheduled_out, "recent": recent_out}
+
     # ========================================================
     # TARGET SOURCES (for form dropdowns)
     # ========================================================
@@ -448,6 +517,7 @@ class ScanManager:
             "tags": [],
             "scanners": [],
             "option_profiles": [],
+            "top_targets": [],
         }
 
         try:
@@ -469,6 +539,13 @@ class ScanManager:
             result["option_profiles"] = self.client.list_option_profiles()
         except Exception as e:
             logger.warning(f"Could not fetch option profiles: {e}")
+
+        # F17: surface the most-used literal targets (from the local DB)
+        # so the lookup page can render them as clickable chips.
+        try:
+            result["top_targets"] = self.db.get_top_targets(50)
+        except Exception as e:
+            logger.warning(f"Could not fetch top targets: {e}")
 
         ScanManager._target_sources_cache = result
         ScanManager._target_sources_fetched_at = now
@@ -504,6 +581,48 @@ class ScanManager:
         if event_type == "ondemand":
             return self._ondemand_events(start_dt, end_dt)
         return self._scheduled_events(start_dt, end_dt)
+
+    def get_launch_forecast(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """
+        F20: project active scheduled scans forward into hourly buckets so
+        the dashboard chart can show "next 24/48/72h" forecasts.
+
+        Returns a list of {hour, count} dicts ordered by time.
+        """
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        end = now + timedelta(hours=hours)
+
+        # Pre-seed buckets so the response is dense (includes zero hours)
+        buckets: Dict[datetime, int] = {}
+        for h in range(hours):
+            buckets[now + timedelta(hours=h)] = 0
+
+        scheduled = self.get_scheduled_scans()
+        for scan in scheduled:
+            if not scan.get("active"):
+                continue
+            try:
+                occurrences = self._expand_schedule(scan, now, end)
+            except Exception as e:
+                logger.debug(
+                    f"Forecast: could not expand schedule for "
+                    f"{scan.get('id') or scan.get('scan_id')}: {e}"
+                )
+                continue
+            for occ in occurrences:
+                # _expand_schedule returns naive datetimes — treat as UTC
+                occ_utc = occ.replace(tzinfo=timezone.utc) if occ.tzinfo is None else occ.astimezone(timezone.utc)
+                bucket = occ_utc.replace(minute=0, second=0, microsecond=0)
+                if bucket in buckets:
+                    buckets[bucket] += 1
+
+        return [
+            {
+                "hour": k.astimezone().strftime("%Y-%m-%d %H:00"),
+                "count": v,
+            }
+            for k, v in sorted(buckets.items())
+        ]
 
     def _ondemand_events(self, start_dt: datetime, end_dt: datetime) -> List[Dict[str, Any]]:
         """Historical on-demand scan events from the local DB."""
@@ -541,16 +660,19 @@ class ScanManager:
         for scan in scheduled:
             if not scan.get("active"):
                 continue
+            # The DB row uses "id" but earlier code mistakenly read "scan_id"
+            # which produced empty URLs (F16). Accept both to be defensive.
+            sid = scan.get("id") or scan.get("scan_id") or ""
             occurrences = self._expand_schedule(scan, start_dt, end_dt)
             for occ in occurrences:
                 events.append({
-                    "id": f"{scan.get('scan_id', '')}_{occ.isoformat()}",
+                    "id": f"{sid}_{occ.isoformat()}",
                     "title": scan.get("title", "Scheduled Scan"),
                     "start": occ.isoformat(),
-                    "url": f"/scheduled/{scan.get('scan_id', '')}",
+                    "url": f"/scheduled/{sid}" if sid else "",
                     "color": "#3788d8",
                     "extendedProps": {
-                        "scan_id": scan.get("scan_id"),
+                        "scan_id": sid,
                         "target": scan.get("target"),
                         "active": scan.get("active"),
                     },
