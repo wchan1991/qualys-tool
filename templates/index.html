@@ -59,18 +59,15 @@
         <div class="metric-label">Inactive</div>
         <div class="metric-value metric-warning" id="metric-scheduled-inactive">--</div>
     </div>
-    <div class="metric-card metric-clickable" onclick="loadTrafficChart('48')" title="Scheduled scans launching in the next 48 hours">
-        <div class="metric-label">Launching Next 48h</div>
-        <div class="metric-value metric-info" id="metric-upcoming-48h">--</div>
-    </div>
 </div>
 
-<!-- Next Scan + Past 24h Results -->
+<!-- Completed Scans Overview -->
+<h3 class="section-title">✅ Completed Scans Overview</h3>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
-    <!-- Next Scheduled Scan -->
+    <!-- Launching Next 48h -->
     <div class="card">
-        <div class="card-header"><h2>⏭️ Next Scheduled Scan</h2></div>
-        <div class="card-body" id="next-scan-card">
+        <div class="card-header"><h2>🚀 Launching Next 48 Hours</h2></div>
+        <div class="card-body" id="next-48h-card">
             <div class="text-muted text-center">Loading...</div>
         </div>
     </div>
@@ -79,13 +76,34 @@
         <div class="card-header"><h2>📊 Past 24 Hours</h2></div>
         <div class="card-body">
             <div class="results-summary" id="past-24h-results">
-                <div class="result-stat result-success">
+                <div class="result-stat result-success metric-clickable" onclick="showPast24hDetail('finished')" title="Click to see succeeded scans">
                     <div class="result-value" id="past-24h-success">--</div>
                     <div class="result-label">Succeeded</div>
                 </div>
-                <div class="result-stat result-failed">
+                <div class="result-stat result-failed metric-clickable" onclick="showPast24hDetail('failed')" title="Click to see failed scans">
                     <div class="result-value" id="past-24h-failed">--</div>
                     <div class="result-label">Failed</div>
+                </div>
+            </div>
+            <!-- Drill-down table (hidden until clicked) -->
+            <div id="past-24h-detail" class="hidden" style="margin-top:1rem">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <h4 id="past-24h-detail-title" style="margin:0;font-size:14px"></h4>
+                    <button class="btn btn-sm btn-secondary" onclick="closePast24hDetail()">✕ Close</button>
+                </div>
+                <div class="table-scroll-wrap">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Title</th>
+                                <th>Target</th>
+                                <th>Launched</th>
+                                <th>Hosts</th>
+                            </tr>
+                        </thead>
+                        <tbody id="past-24h-detail-tbody"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -166,6 +184,7 @@
 <script>
 let _trafficChart = null;
 let _chartMode = 'past';  // 'past' | '24' | '48' | '72'
+let _past24hScans = [];   // cached for drill-down
 
 // F25: navigate to the lookup page with a status pre-applied
 function goToLookup(status) {
@@ -174,7 +193,7 @@ function goToLookup(status) {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
-    loadNextScan();
+    loadNext48h();
     loadPast24hResults();
     loadRecentScans();
     loadUpcomingScans();
@@ -194,7 +213,6 @@ async function loadDashboard() {
             document.getElementById('metric-scheduled-total').textContent = d.total_scheduled ?? '--';
             document.getElementById('metric-scheduled-active').textContent = d.active_scheduled ?? '--';
             document.getElementById('metric-scheduled-inactive').textContent = d.inactive_scheduled ?? '--';
-            document.getElementById('metric-upcoming-48h').textContent = d.upcoming_48h ?? '--';
         }
     } catch (e) {
         console.error('Failed to load dashboard:', e);
@@ -278,8 +296,8 @@ async function loadTrafficChart(mode = 'past') {
     }
 }
 
-async function loadNextScan() {
-    const container = document.getElementById('next-scan-card');
+async function loadNext48h() {
+    const container = document.getElementById('next-48h-card');
     try {
         const res = await fetch('/api/scheduled');
         const json = await res.json();
@@ -287,37 +305,53 @@ async function loadNextScan() {
             container.innerHTML = '<div class="text-muted text-center">No scheduled scans found.</div>';
             return;
         }
-        // Find the next active scan by earliest next_launch
-        const active = json.data.filter(s => s.active && s.next_launch);
-        if (!active.length) {
-            container.innerHTML = '<div class="text-muted text-center">No active scans with upcoming launches.</div>';
+        const now = new Date();
+        const cutoff = new Date(now.getTime() + 48 * 3600000);
+        const upcoming = json.data
+            .filter(s => s.active && s.next_launch)
+            .filter(s => {
+                const d = new Date(s.next_launch);
+                return d >= now && d <= cutoff;
+            })
+            .sort((a, b) => new Date(a.next_launch) - new Date(b.next_launch));
+
+        if (!upcoming.length) {
+            container.innerHTML = '<div class="text-muted text-center">No scans launching in the next 48 hours.</div>';
             return;
         }
-        active.sort((a, b) => new Date(a.next_launch) - new Date(b.next_launch));
-        const next = active[0];
-        const launchDate = new Date(next.next_launch);
-        const now = new Date();
-        const diffMs = launchDate - now;
-        const diffH = Math.floor(diffMs / 3600000);
-        const diffM = Math.floor((diffMs % 3600000) / 60000);
-        const countdown = diffMs > 0
-            ? `in ${diffH > 0 ? diffH + 'h ' : ''}${diffM}m`
-            : 'overdue';
+
+        const count = upcoming.length;
+        const listHtml = upcoming.slice(0, 5).map(s => {
+            const d = new Date(s.next_launch);
+            const diffMs = d - now;
+            const diffH = Math.floor(diffMs / 3600000);
+            const diffM = Math.floor((diffMs % 3600000) / 60000);
+            const countdown = `${diffH > 0 ? diffH + 'h ' : ''}${diffM}m`;
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-color)">
+                <div style="flex:1;min-width:0">
+                    <a href="/scheduled/${encodeURIComponent(s.id)}" style="text-decoration:none">
+                        <strong style="color:var(--text-primary)">${escapeHtml(s.title || 'Untitled')}</strong>
+                    </a>
+                    <div class="text-muted" style="font-size:11px">${escapeHtml(s.target || '')}</div>
+                </div>
+                <div style="text-align:right;white-space:nowrap;margin-left:12px">
+                    <div style="font-weight:600;color:var(--accent);font-size:14px">${countdown}</div>
+                    <div class="text-muted" style="font-size:11px">${formatDate(s.next_launch)}</div>
+                </div>
+            </div>`;
+        }).join('');
+
+        const moreHtml = count > 5 ? `<div class="text-muted" style="font-size:12px;margin-top:6px;text-align:center">… and ${count - 5} more</div>` : '';
 
         container.innerHTML = `
-            <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-                <div style="flex:1;min-width:200px">
-                    <a href="/scheduled/${encodeURIComponent(next.id)}" style="text-decoration:none">
-                        <h3 style="margin:0 0 4px;font-size:16px;color:var(--text-primary)">${escapeHtml(next.title || 'Untitled')}</h3>
-                    </a>
-                    <div class="text-muted" style="font-size:13px">${escapeHtml(next.schedule || '')}</div>
-                    <div class="text-muted" style="font-size:12px;margin-top:2px">Target: ${escapeHtml(next.target || '—')}</div>
-                </div>
-                <div style="text-align:center">
-                    <div style="font-size:28px;font-weight:700;color:var(--accent)">${countdown}</div>
-                    <div style="font-size:12px;color:var(--text-secondary)">${formatDate(next.next_launch)}</div>
+            <div style="display:flex;align-items:center;gap:1rem;margin-bottom:12px">
+                <div style="font-size:36px;font-weight:700;color:var(--accent)">${count}</div>
+                <div>
+                    <div style="font-weight:600">scan${count !== 1 ? 's' : ''} launching</div>
+                    <div class="text-muted" style="font-size:12px">in the next 48 hours</div>
                 </div>
             </div>
+            ${listHtml}${moreHtml}
         `;
     } catch (e) {
         container.innerHTML = '<div class="text-muted text-center">Failed to load.</div>';
@@ -329,10 +363,10 @@ async function loadPast24hResults() {
         const res = await fetch('/api/scans/recent?hours=24');
         const json = await res.json();
         if (!json.success || !json.data) return;
-        const scans = json.data;
+        _past24hScans = json.data;
         let succeeded = 0;
         let failed = 0;
-        for (const s of scans) {
+        for (const s of _past24hScans) {
             const st = (s.status || '').toLowerCase();
             if (st === 'finished') succeeded++;
             else if (st === 'error' || st === 'canceled') failed++;
@@ -342,6 +376,48 @@ async function loadPast24hResults() {
     } catch (e) {
         console.error('Failed to load 24h results:', e);
     }
+}
+
+function showPast24hDetail(filter) {
+    const detail = document.getElementById('past-24h-detail');
+    const title = document.getElementById('past-24h-detail-title');
+    const tbody = document.getElementById('past-24h-detail-tbody');
+
+    let filtered;
+    if (filter === 'finished') {
+        title.textContent = '✅ Succeeded Scans (Past 24h)';
+        filtered = _past24hScans.filter(s => (s.status || '').toLowerCase() === 'finished');
+    } else {
+        title.textContent = '❌ Failed Scans (Past 24h)';
+        filtered = _past24hScans.filter(s => {
+            const st = (s.status || '').toLowerCase();
+            return st === 'error' || st === 'canceled';
+        });
+    }
+
+    if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-muted text-center">No ${filter === 'finished' ? 'succeeded' : 'failed'} scans in the past 24 hours.</td></tr>`;
+    } else {
+        tbody.innerHTML = filtered.map(s => {
+            const st = (s.status || '').toLowerCase();
+            const hostInfo = s.processed != null
+                ? `✓ ${s.processed}${s.total_hosts != null ? ' / ' + s.total_hosts : ''}`
+                : '—';
+            return `<tr>
+                <td><span class="status-badge status-${st}">${escapeHtml(s.status)}</span></td>
+                <td><a href="/scans/${encodeURIComponent(s.ref)}">${escapeHtml(s.title || 'Untitled')}</a></td>
+                <td class="target-cell">${escapeHtml(s.target || '')}</td>
+                <td>${formatDate(s.launched)}</td>
+                <td>${hostInfo}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    detail.classList.remove('hidden');
+}
+
+function closePast24hDetail() {
+    document.getElementById('past-24h-detail').classList.add('hidden');
 }
 
 async function loadRecentScans() {
@@ -412,7 +488,7 @@ async function refreshAll() {
             const d = json.data;
             showToast(`Refreshed ${d.scans} scans, ${d.scheduled} scheduled`, 'success');
             loadDashboard();
-            loadNextScan();
+            loadNext48h();
             loadPast24hResults();
             loadRecentScans();
             loadUpcomingScans();
