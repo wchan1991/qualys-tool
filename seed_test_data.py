@@ -179,6 +179,21 @@ def seed():
     ]
 
     count = db.save_scans(scans)
+    db.record_failures(scans)
+    # Seed additional historical failures for realism
+    db.conn.execute("""
+        INSERT OR REPLACE INTO failure_aggregates (scan_ref, scan_title, total_failures, last_failure_date, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, ("scan/1718234008.88345", "Web App Scan - Customer Portal", 7,
+          (now - timedelta(hours=3)).strftime("%Y/%m/%d %H:%M:%S"),
+          now.isoformat()))
+    db.conn.execute("""
+        INSERT OR REPLACE INTO failure_aggregates (scan_ref, scan_title, total_failures, last_failure_date, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, ("scan/1718234009.99345", "Database Server Audit", 3,
+          (now - timedelta(hours=6)).strftime("%Y/%m/%d %H:%M:%S"),
+          now.isoformat()))
+    db.conn.commit()
     print(f"  Inserted {count} running/completed scans")
 
     # ── Scheduled scans ────────────────────────────────────────

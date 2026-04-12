@@ -63,6 +63,7 @@ class ScanManager:
         try:
             scans = self.client.list_scans()
             count = self.db.save_scans(scans)
+            self.db.record_failures(scans)
             logger.info(f"Refreshed {count} scans")
             return count
         except QualysError as e:

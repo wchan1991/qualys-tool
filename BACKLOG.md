@@ -30,6 +30,12 @@ Changes and feature requests for the Qualys Scan Manager.
 - **Description:** Add in an import scan as a sub menu for the Scheduled Scans. I want to be able to import existing excel sheets of planned scans, have the platforma assess the changes, have the ability to make changes in the tool and  publish.
 - **Acceptance Criteria:** The acceptance criteria should be an existing submenu, the succesful interpretation of an excel sheet, seeing a single view of all the "scans" inside the sheet, setting accurate time and targets, and being able to control and publish.
 
+### [REQ-018] Operator Notes for Scans
+- **Type:** Feature
+- **Priority:** Medium
+- **Description:** Add a note/annotation function that lets operators track what each scan does and why. Local-only `scan_notes` SQLite table with full CRUD — any scan (on-demand or scheduled) can have multiple timestamped notes. Display as "Operator Notes" section in scan detail pages with textarea input and note history.
+- **Acceptance Criteria:** Notes can be created, viewed, and deleted per scan. Notes persist across refreshes (local DB). Notes visible on scan detail and scheduled scan detail pages.
+
 ## Approved
 
 <!-- Items approved for implementation -->

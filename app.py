@@ -361,9 +361,18 @@ def api_dashboard():
 @app.route("/api/scans")
 @api_response
 def api_scans():
-    """Get scans from local database."""
+    """Get scans from local database, with lifetime failure counts."""
     manager = get_manager()
-    return manager.get_scans()
+    scans = manager.get_scans()
+    # Attach failure counts
+    refs = [s["ref"] for s in scans if s.get("ref")]
+    if refs:
+        failures = manager.db.get_failure_counts(refs)
+        for s in scans:
+            info = failures.get(s.get("ref"))
+            if info:
+                s["total_failures"] = info["total_failures"]
+    return scans
 
 
 @app.route("/api/scans/refresh", methods=["POST"])
@@ -716,9 +725,16 @@ def api_stage_bulk():
 @app.route("/api/scans/<path:scan_ref>/detail")
 @api_response
 def api_scan_detail(scan_ref):
-    """Get full detail for a running/completed scan."""
+    """Get full detail for a running/completed scan, with failure history."""
     manager = get_manager()
-    return manager.get_scan_detail(scan_ref)
+    detail = manager.get_scan_detail(scan_ref)
+    # Attach failure count
+    failures = manager.db.get_failure_counts([scan_ref])
+    info = failures.get(scan_ref)
+    if info:
+        detail["total_failures"] = info["total_failures"]
+        detail["last_failure_date"] = info["last_failure_date"]
+    return detail
 
 
 @app.route("/api/scheduled/<scan_id>/detail")
@@ -882,6 +898,19 @@ def api_enter_offline_mode():
                 logger.warning(f"Could not restore backup: {e}")
     logger.info("Manually entered offline mode")
     return {"offline": True}
+
+
+# ============================================================
+# FAILURE TRACKING
+# ============================================================
+
+@app.route("/api/failures/top")
+@api_response
+def api_top_failures():
+    """Get the most frequently failing scans."""
+    limit = request.args.get("limit", 5, type=int)
+    manager = get_manager()
+    return manager.db.get_most_failing_scans(limit)
 
 
 # ============================================================

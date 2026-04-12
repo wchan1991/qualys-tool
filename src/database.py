@@ -210,6 +210,17 @@ class ScanDatabase:
             )
         """)
 
+        # Persistent failure tracking (NOT cleared on startup)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS failure_aggregates (
+                scan_ref TEXT PRIMARY KEY,
+                scan_title TEXT,
+                total_failures INTEGER DEFAULT 0,
+                last_failure_date TEXT,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
         # Indexes for faster queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_scans_ref ON scans(ref)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_scans_fetched ON scans(fetched_at)")
@@ -1032,6 +1043,110 @@ class ScanDatabase:
             cursor.execute(f"DELETE FROM {table}")
         self.conn.commit()
         logger.info("Cleared scan data from database (staged_changes preserved)")
+
+    # ========================================================
+    # FAILURE TRACKING
+    # ========================================================
+
+    def record_failures(self, scans: List[Dict[str, Any]]) -> int:
+        """
+        Scan a batch of scans for Error/Canceled status and increment
+        their lifetime failure counts.  Called after each save_scans().
+
+        To avoid double-counting the same failure across refreshes,
+        we track the last_failure_date and only count a failure once
+        per unique launched timestamp.
+
+        Returns number of new failures recorded.
+        """
+        cursor = self.conn.cursor()
+        now = datetime.now().astimezone().isoformat()
+        recorded = 0
+
+        for scan in scans:
+            status = (scan.get("status") or "").lower()
+            if status not in ("error", "canceled"):
+                continue
+            ref = scan.get("ref", "")
+            if not ref:
+                continue
+            title = scan.get("title", "")
+            launched = scan.get("launched", "")
+
+            # Check if we already counted this specific failure
+            # (same ref + same launched timestamp)
+            cursor.execute(
+                "SELECT last_failure_date FROM failure_aggregates WHERE scan_ref = ?",
+                (ref,),
+            )
+            row = cursor.fetchone()
+            if row and row[0] == launched:
+                continue  # Already counted this failure
+
+            cursor.execute("""
+                INSERT INTO failure_aggregates (scan_ref, scan_title, total_failures, last_failure_date, updated_at)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(scan_ref) DO UPDATE SET
+                    scan_title = excluded.scan_title,
+                    total_failures = total_failures + 1,
+                    last_failure_date = excluded.last_failure_date,
+                    updated_at = excluded.updated_at
+            """, (ref, title, launched, now))
+            recorded += 1
+
+        if recorded:
+            self.conn.commit()
+            logger.info(f"Recorded {recorded} new scan failures")
+        return recorded
+
+    def get_failure_counts(self, scan_refs: List[str] = None) -> Dict[str, Dict]:
+        """
+        Get failure aggregates, optionally filtered by scan refs.
+
+        Returns dict keyed by scan_ref:
+            { "scan/12345": {"title": "...", "total_failures": 5, "last_failure_date": "..."} }
+        """
+        cursor = self.conn.cursor()
+        if scan_refs:
+            placeholders = ",".join("?" for _ in scan_refs)
+            cursor.execute(
+                f"SELECT scan_ref, scan_title, total_failures, last_failure_date "
+                f"FROM failure_aggregates WHERE scan_ref IN ({placeholders})",
+                scan_refs,
+            )
+        else:
+            cursor.execute(
+                "SELECT scan_ref, scan_title, total_failures, last_failure_date "
+                "FROM failure_aggregates ORDER BY total_failures DESC"
+            )
+        return {
+            row["scan_ref"]: {
+                "title": row["scan_title"],
+                "total_failures": row["total_failures"],
+                "last_failure_date": row["last_failure_date"],
+            }
+            for row in cursor.fetchall()
+        }
+
+    def get_most_failing_scans(self, limit: int = 5) -> List[Dict]:
+        """Return the top N scans by lifetime failure count."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT scan_ref, scan_title, total_failures, last_failure_date "
+            "FROM failure_aggregates "
+            "WHERE total_failures > 0 "
+            "ORDER BY total_failures DESC LIMIT ?",
+            (limit,),
+        )
+        return [
+            {
+                "ref": row["scan_ref"],
+                "title": row["scan_title"],
+                "total_failures": row["total_failures"],
+                "last_failure_date": row["last_failure_date"],
+            }
+            for row in cursor.fetchall()
+        ]
 
     # ========================================================
     # DASHBOARD TRAFFIC (Feature 6)

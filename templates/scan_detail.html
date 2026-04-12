@@ -121,6 +121,29 @@ function renderDetail(scan) {
         </div>
 
         ${renderHostCounts(scan)}
+        ${renderFailureHistory(scan)}
+    `;
+}
+
+function renderFailureHistory(scan) {
+    if (!scan.total_failures || scan.total_failures <= 0) return '';
+    const lastDate = scan.last_failure_date ? formatDate(scan.last_failure_date) : 'Unknown';
+    return `
+        <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h2>⚠️ Failure History</h2></div>
+            <div class="card-body">
+                <div class="results-summary">
+                    <div class="result-stat result-failed">
+                        <div class="result-value">${scan.total_failures}</div>
+                        <div class="result-label">Lifetime Failures</div>
+                    </div>
+                    <div class="result-stat" style="background:var(--bg-tertiary);border-radius:var(--radius)">
+                        <div class="result-value" style="color:var(--text-primary);font-size:16px">${lastDate}</div>
+                        <div class="result-label">Last Failure</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     `;
 }
 
