@@ -876,12 +876,12 @@ class ScanDatabase:
     def get_tag_report(self) -> List[Dict[str, Any]]:
         """
         Generate tag usage report.
-        
+
         Returns:
-            List of dicts with tag, count, and example scans
+            List of dicts with tag, count, and scan details
         """
         cursor = self.conn.cursor()
-        
+
         # Get tag counts
         cursor.execute("""
             SELECT tag, COUNT(DISTINCT scan_ref) as scan_count
@@ -889,27 +889,77 @@ class ScanDatabase:
             GROUP BY tag
             ORDER BY scan_count DESC
         """)
-        
+
+        # Latest snapshot timestamps for joining
+        cursor2 = self.conn.cursor()
+        cursor2.execute("SELECT MAX(fetched_at) FROM scans")
+        latest_scan_ts = (cursor2.fetchone() or [None])[0]
+        cursor2.execute("SELECT MAX(fetched_at) FROM scheduled_scans")
+        latest_sched_ts = (cursor2.fetchone() or [None])[0]
+
         report = []
         for row in cursor.fetchall():
             tag = row["tag"]
             count = row["scan_count"]
-            
-            # Get example scans for this tag
-            cursor.execute("""
-                SELECT DISTINCT scan_ref 
-                FROM tag_usage 
+
+            # Get scan details for this tag (up to 5)
+            scan_refs_cursor = self.conn.cursor()
+            scan_refs_cursor.execute("""
+                SELECT DISTINCT scan_ref
+                FROM tag_usage
                 WHERE tag = ?
-                LIMIT 3
+                LIMIT 5
             """, (tag,))
-            examples = [r["scan_ref"] for r in cursor.fetchall()]
-            
+            refs = [r["scan_ref"] for r in scan_refs_cursor.fetchall()]
+
+            scans = []
+            for ref in refs:
+                # Try non-scheduled scans first
+                if latest_scan_ts:
+                    detail_cursor = self.conn.cursor()
+                    detail_cursor.execute("""
+                        SELECT ref, title, target, status
+                        FROM scans
+                        WHERE ref = ? AND fetched_at = ?
+                    """, (ref, latest_scan_ts))
+                    srow = detail_cursor.fetchone()
+                    if srow:
+                        scans.append({
+                            "ref": srow["ref"],
+                            "title": srow["title"],
+                            "target": srow["target"],
+                            "status": srow["status"],
+                            "type": "scan",
+                        })
+                        continue
+                # Try scheduled scans
+                if latest_sched_ts:
+                    detail_cursor = self.conn.cursor()
+                    detail_cursor.execute("""
+                        SELECT scan_id, title, target, status
+                        FROM scheduled_scans
+                        WHERE scan_id = ? AND fetched_at = ?
+                    """, (ref, latest_sched_ts))
+                    srow = detail_cursor.fetchone()
+                    if srow:
+                        scans.append({
+                            "id": srow["scan_id"],
+                            "title": srow["title"],
+                            "target": srow["target"],
+                            "status": srow["status"] or "active",
+                            "type": "scheduled",
+                        })
+                        continue
+                # Fallback: just the ref
+                scans.append({"ref": ref, "title": ref, "target": "", "status": "", "type": "scan"})
+
             report.append({
                 "tag": tag,
                 "scan_count": count,
-                "example_scans": examples,
+                "example_scans": refs,
+                "scans": scans,
             })
-        
+
         return report
     
     def get_scans_by_tag(self, tag: str) -> List[str]:

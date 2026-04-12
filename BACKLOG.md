@@ -24,6 +24,11 @@ Changes and feature requests for the Qualys Scan Manager.
 ## Proposed
 
 <!-- Add new requests here -->
+### [REQ-013] Expansion 
+- **Type:** Feature
+- **Priority:** High
+- **Description:** Add in an import scan as a sub menu for the Scheduled Scans. I want to be able to import existing excel sheets of planned scans, have the platforma assess the changes, have the ability to make changes in the tool and  publish.
+- **Acceptance Criteria:** The acceptance criteria should be an existing submenu, the succesful interpretation of an excel sheet, seeing a single view of all the "scans" inside the sheet, setting accurate time and targets, and being able to control and publish.
 
 ## Approved
 
@@ -136,3 +141,24 @@ Changes and feature requests for the Qualys Scan Manager.
   - Updated `get_scans()` and `get_recent_scans()` to include `processed` and `total_hosts` from raw data
   - Scan detail page now shows a "Scan Results" card with Hosts Scanned / Hosts Failed / Total Hosts for finished/error/canceled scans
   - Scan table rows show a compact host count indicator (e.g. "✓ 42 · ✗ 3 / 45") under the status badge
+
+### [REQ-014] Tags page — scan details and Lookup integration
+- **Type:** Enhancement
+- **Priority:** Medium
+- **Completed:** 2026-04-12
+- **Summary:**
+  - Tag table now shows scan details (title, status badge, target) instead of just raw refs
+  - Each tag row has a "View in Lookup" button that opens the Lookup page pre-filtered by that tag
+  - Scan titles link directly to their detail pages (scheduled or non-scheduled)
+  - Updated `get_tag_report()` to join against scans/scheduled_scans tables for title, status, target data
+  - Table upgraded to `data-table` class with 4 columns: Tag, Scan Count, Scans Using This Tag, Actions
+
+### [REQ-015] Dashboard — Next scan status and past 24h results
+- **Type:** Feature
+- **Priority:** High
+- **Completed:** 2026-04-12
+- **Summary:**
+  - Added two new cards between the scheduled metrics and the activity chart:
+    - **Next Scheduled Scan**: Shows the soonest active scheduled scan with title, schedule, target, countdown timer, and launch date
+    - **Past 24 Hours**: Shows succeeded (Finished) vs failed (Error/Canceled) scan counts from the last 24 hours
+  - Both cards refresh when "Refresh All from Qualys" is clicked

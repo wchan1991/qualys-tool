@@ -31,16 +31,17 @@
 <div class="card">
     <div class="card-body">
         <div class="table-scroll-wrap">
-            <table class="table" id="tags-table">
+            <table class="data-table" id="tags-table">
                 <thead>
                     <tr>
                         <th>Tag</th>
                         <th>Scan Count</th>
-                        <th>Example Scans</th>
+                        <th>Scans Using This Tag</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="tags-tbody">
-                    <tr><td colspan="3" class="text-muted text-center">Loading...</td></tr>
+                    <tr><td colspan="4" class="text-muted text-center">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -122,18 +123,37 @@ async function loadTags() {
 function renderTags(tags) {
     const tbody = document.getElementById('tags-tbody');
     if (!tags.length) {
-        tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center">No matching tags</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No matching tags</td></tr>';
         return;
     }
     tbody.innerHTML = tags.map(tag => {
-        const examples = (tag.example_scans || []).slice(0, 3).map(ref =>
-            `<span class="scan-ref">${escapeHtml(ref)}</span>`
-        ).join(', ');
+        const scans = (tag.scans || []).slice(0, 5);
+        let scanLinks = '—';
+        if (scans.length) {
+            scanLinks = scans.map(s => {
+                const href = s.type === 'scheduled'
+                    ? `/scheduled/${encodeURIComponent(s.id)}`
+                    : `/scans/${encodeURIComponent(s.ref)}`;
+                const statusCls = (s.status || '').toLowerCase();
+                return `<div style="margin-bottom:4px">
+                    <a href="${href}" style="text-decoration:none">
+                        <strong>${escapeHtml(s.title || s.ref || s.id)}</strong>
+                    </a>
+                    <span class="status-badge status-${statusCls}" style="margin-left:6px;font-size:10px">${escapeHtml(s.status || '')}</span>
+                    <div class="text-muted" style="font-size:11px">${escapeHtml(s.target || '')}</div>
+                </div>`;
+            }).join('');
+            if (tag.scan_count > 5) {
+                scanLinks += `<div class="text-muted" style="font-size:11px">… and ${tag.scan_count - 5} more</div>`;
+            }
+        }
+        const lookupUrl = `/lookup?type=tag&value=${encodeURIComponent(tag.tag)}`;
         return `
             <tr>
                 <td><span class="tag tag-lg">${escapeHtml(tag.tag)}</span></td>
                 <td><span class="count-badge">${tag.scan_count}</span></td>
-                <td>${examples || '—'}</td>
+                <td>${scanLinks}</td>
+                <td><a href="${lookupUrl}" class="btn btn-sm btn-primary">🔎 View in Lookup</a></td>
             </tr>
         `;
     }).join('');
