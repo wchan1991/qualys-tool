@@ -150,6 +150,17 @@
     });
 
     async function runInit() {
+        // If the server detected offline mode at startup, skip init and go to dashboard
+        try {
+            const healthRes = await fetch('/api/health');
+            const healthJson = await healthRes.json();
+            if (healthJson.success && healthJson.data.offline) {
+                document.getElementById('init-status').textContent = 'Offline mode — redirecting to dashboard…';
+                setTimeout(() => { window.location.href = '/'; }, 500);
+                return;
+            }
+        } catch (e) { /* continue with normal init */ }
+
         const steps = [
             { id: 'step-1', label: '✅ Step 1: Authentication OK', url: '/api/health', method: 'GET' },
             { id: 'step-2', label: '✅ Step 2: Scans refreshed', url: '/api/refresh-all', method: 'POST' },

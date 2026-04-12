@@ -86,6 +86,7 @@ function renderDetail(scan) {
                     </div>
                     <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
                         <span class="status-badge status-${status}">${scan.status || 'Unknown'}</span>
+                        <a href="/scans/${encodeURIComponent(scan.ref || SCAN_REF)}/edit" class="btn btn-primary">✏️ Edit</a>
                         ${actions}
                     </div>
                 </div>

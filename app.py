@@ -80,6 +80,7 @@ def get_manager() -> ScanManager:
 # ============================================================
 
 _startup_done = False
+_offline_mode = False
 
 # Init gate (F22): block non-init routes while first refresh is running
 _init_lock = threading.Lock()
@@ -94,37 +95,73 @@ _ALLOWED_DURING_INIT = {
 }
 
 
+BACKUP_DIR = Path(__file__).parent / "backups"
+MAX_BACKUPS = 2
+
+
 def _perform_startup_backup() -> None:
-    """Copy the live DB to data/backups/ before clearing it."""
+    """Copy the live DB to backups/ before clearing it, keeping only the latest MAX_BACKUPS."""
     try:
         db_path = Path(get_config().db_path)
         if not db_path.exists() or db_path.stat().st_size == 0:
             return
-        backup_dir = db_path.parent / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = backup_dir / f"qualys_scans_{stamp}.db"
+        dest = BACKUP_DIR / f"qualys_scans_{stamp}.db"
         shutil.copy2(db_path, dest)
         logger.info(f"Startup backup created: {dest}")
+        # Retain only the most recent backups
+        backups = sorted(BACKUP_DIR.glob("qualys_scans_*.db"), reverse=True)
+        for old in backups[MAX_BACKUPS:]:
+            old.unlink()
+            logger.info(f"Deleted old backup: {old.name}")
     except Exception as e:
         logger.warning(f"Could not create startup backup: {e}")
 
 
 @app.before_request
 def run_startup():
-    """Back up then clear scan data on first request after each app launch."""
-    global _startup_done, _init_in_progress
+    """Back up then clear scan data on first request after each app launch.
+
+    If the Qualys API is unreachable or unconfigured, the app enters offline
+    mode: cached data is preserved and the init gate is skipped.
+    """
+    global _startup_done, _init_in_progress, _offline_mode, _manager
     if not _startup_done:
         _startup_done = True
         _perform_startup_backup()
-        try:
-            get_manager().db.clear_scan_data()
-            logger.info("Scan data cleared for fresh session")
-            # Arm the init gate — will be released when /api/refresh-all completes
-            with _init_lock:
-                _init_in_progress = True
-        except Exception as e:
-            logger.warning(f"Could not clear scan data on startup: {e}")
+
+        # Probe API connectivity: attempt a full refresh.
+        # If it succeeds we're online. If it fails for any reason
+        # (bad creds, network, etc.) fall back to offline mode with cached data.
+        config = get_config()
+        issues = config.validate()
+
+        if not issues:
+            try:
+                manager = get_manager()
+                manager.db.clear_scan_data()
+                manager.refresh_all()
+                logger.info("Startup refresh succeeded — online mode")
+            except Exception as e:
+                logger.warning(f"Startup refresh failed, entering offline mode: {e}")
+                _offline_mode = True
+                # Restore the backup we just made so cached data is available
+                backups = sorted(BACKUP_DIR.glob("qualys_scans_*.db"), reverse=True)
+                if backups:
+                    try:
+                        db_path = Path(get_config().db_path)
+                        shutil.copy2(backups[0], db_path)
+                        # Reset the manager so it picks up the restored DB
+                        _manager = None
+                        logger.info(f"Restored backup for offline mode: {backups[0].name}")
+                    except Exception as restore_err:
+                        logger.warning(f"Could not restore backup: {restore_err}")
+        else:
+            _offline_mode = True
+
+        if _offline_mode:
+            logger.info("Starting in OFFLINE mode — using cached data")
 
 
 @app.before_request
@@ -169,9 +206,9 @@ def api_response(f):
 
 @app.route("/")
 def index():
-    """Main dashboard page — redirect to /init when DB is empty."""
+    """Main dashboard page — redirect to /init when DB is empty (unless offline)."""
     config = get_config()
-    if get_manager().db.is_empty():
+    if get_manager().db.is_empty() and not _offline_mode:
         return redirect(url_for("init_page"))
     return render_template(
         "index.html",
@@ -240,6 +277,12 @@ def scan_launch_page():
     return render_template("scan_form.html", mode="launch")
 
 
+@app.route("/scans/<path:scan_ref>/edit")
+def scan_edit_page(scan_ref):
+    """Edit/relaunch a non-scheduled scan — prefills the launch form."""
+    return render_template("scan_form.html", mode="edit_scan", scan_ref=scan_ref)
+
+
 @app.route("/lookup")
 def lookup_page():
     """Target reverse lookup page."""
@@ -268,20 +311,21 @@ def api_health():
     """Check API connectivity."""
     config = get_config()
     issues = config.validate()
-    
+
     if issues:
-        return {"status": "unconfigured", "issues": issues}
-    
+        return {"status": "unconfigured", "issues": issues, "offline": _offline_mode}
+
     try:
         manager = get_manager()
         profiles = manager.client.list_option_profiles()
         return {
             "status": "connected",
             "api_url": config.api_url,
-            "profiles": len(profiles)
+            "profiles": len(profiles),
+            "offline": _offline_mode,
         }
     except QualysError as e:
-        return {"status": "error", "message": e.message}
+        return {"status": "error", "message": e.message, "offline": _offline_mode}
 
 
 @app.route("/api/dashboard")
@@ -393,7 +437,12 @@ def api_discard_all():
 @app.route("/api/apply", methods=["POST"])
 @api_response
 def api_apply():
-    """Apply all staged changes."""
+    """Apply all staged changes. Blocked in offline mode."""
+    if _offline_mode:
+        raise RuntimeError(
+            "Cannot apply changes in offline mode — Qualys API is not connected. "
+            "Restart the app with a valid connection to apply staged changes."
+        )
     manager = get_manager()
     results = manager.apply_staged_changes()
     return results
@@ -696,11 +745,9 @@ def api_calendar():
 @api_response
 def api_list_backups():
     """List available DB backups."""
-    db_path = Path(get_config().db_path)
-    backup_dir = db_path.parent / "backups"
-    if not backup_dir.exists():
+    if not BACKUP_DIR.exists():
         return []
-    files = sorted(backup_dir.glob("qualys_scans_*.db"), reverse=True)
+    files = sorted(BACKUP_DIR.glob("qualys_scans_*.db"), reverse=True)
     return [
         {
             "filename": f.name,
@@ -719,8 +766,7 @@ def api_restore_backup(filename):
     # Validate filename — no path separators or traversal
     if "/" in filename or "\\" in filename or ".." in filename:
         raise ValueError("Invalid filename")
-    db_path = Path(get_config().db_path)
-    src = db_path.parent / "backups" / filename
+    src = BACKUP_DIR / filename
     if not src.exists():
         raise FileNotFoundError(f"Backup not found: {filename}")
     # Close existing connections before overwriting
@@ -730,6 +776,7 @@ def api_restore_backup(filename):
         except Exception:
             pass
         _manager = None
+    db_path = Path(get_config().db_path)
     shutil.copy2(src, db_path)
     logger.info(f"Restored backup: {filename}")
     return {"restored": filename}

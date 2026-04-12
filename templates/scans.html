@@ -46,7 +46,7 @@
 <div class="card">
     <div class="card-body">
         <div class="table-scroll-wrap">
-            <table class="table" id="scans-table">
+            <table class="data-table" id="scans-table">
                 <thead>
                     <tr>
                         <th style="width:36px"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
@@ -165,7 +165,7 @@ function scanRowHTML(scan) {
                 <a href="/scans/${encodeURIComponent(scan.ref)}"><div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div></a>
                 <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>
             </td>
-            <td>${escapeHtml(scan.target || '')}</td>
+            <td class="target-cell">${escapeHtml(scan.target || '')}</td>
             <td>${escapeHtml(scan.type || '')}</td>
             <td>${tags}</td>
             <td>${formatDate(scan.launched)}</td>

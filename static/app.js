@@ -38,11 +38,11 @@ function updateThemeButton(theme) {
 async function checkConnection() {
     const dot = document.getElementById('connection-status');
     if (!dot) return;
-    
+
     try {
         const res = await fetch('/api/health');
         const json = await res.json();
-        
+
         if (json.success && json.data.status === 'connected') {
             dot.classList.add('connected');
             dot.classList.remove('error');
@@ -51,6 +51,17 @@ async function checkConnection() {
             dot.classList.add('error');
             dot.classList.remove('connected');
             dot.title = json.data.message || 'Not connected';
+        }
+
+        // Offline mode UI
+        const offline = json.success && json.data.offline;
+        const banner = document.getElementById('offline-banner');
+        if (banner) banner.classList.toggle('hidden', !offline);
+        // Disable "Make It So" button when offline
+        const applyBtn = document.getElementById('apply-btn');
+        if (applyBtn) {
+            applyBtn.disabled = !!offline;
+            applyBtn.title = offline ? 'Applying changes is disabled in offline mode' : '';
         }
     } catch (e) {
         dot.classList.add('error');

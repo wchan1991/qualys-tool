@@ -2,6 +2,7 @@
 {% block title %}
     {% if mode == 'create_scheduled' %}New Scheduled Scan
     {% elif mode == 'edit_scheduled' %}Edit Scheduled Scan
+    {% elif mode == 'edit_scan' %}Edit Scan
     {% else %}Launch Scan
     {% endif %} - Qualys Scan Manager
 {% endblock %}
@@ -15,12 +16,15 @@
     <h1>
         {% if mode == 'create_scheduled' %}📅 New Scheduled Scan
         {% elif mode == 'edit_scheduled' %}✏️ Edit Scheduled Scan
+        {% elif mode == 'edit_scan' %}✏️ Edit Scan
         {% else %}🚀 Launch On-Demand Scan
         {% endif %}
     </h1>
     <div class="header-actions">
         {% if mode == 'edit_scheduled' %}
             <a href="/scheduled/{{ scan_id }}" class="btn btn-secondary">← Back to Detail</a>
+        {% elif mode == 'edit_scan' %}
+            <a href="/scans/{{ scan_ref }}" class="btn btn-secondary">← Back to Detail</a>
         {% elif mode == 'create_scheduled' %}
             <a href="/scheduled" class="btn btn-secondary">← Back to Scheduled</a>
         {% else %}
@@ -63,7 +67,7 @@
             </div>
 
             <!-- Schedule section — only for scheduled scans -->
-            {% if mode != 'launch' %}
+            {% if mode not in ('launch', 'edit_scan') %}
             <fieldset style="border:1px solid var(--border-color, #ddd);border-radius:6px;padding:1rem;margin-bottom:1rem">
                 <legend style="padding:0 0.5rem"><strong>Schedule</strong></legend>
 
@@ -133,7 +137,7 @@
                 <button type="button" class="btn btn-secondary" onclick="history.back()">Cancel</button>
                 <button type="submit" class="btn btn-primary" onclick="submitForm()">
                     {% if mode == 'launch' %}🚀 Stage Launch
-                    {% elif mode == 'edit_scheduled' %}📋 Stage Edit
+                    {% elif mode in ('edit_scheduled', 'edit_scan') %}📋 Stage Edit
                     {% else %}📋 Stage New Scan
                     {% endif %}
                 </button>
@@ -147,6 +151,7 @@
 <script>
 const MODE = {{ mode | tojson }};
 const SCAN_ID = {{ (scan_id if scan_id is defined else '') | tojson }};
+const SCAN_REF = {{ (scan_ref if scan_ref is defined else '') | tojson }};
 
 let targetPicker = null;
 let sources = {};
@@ -209,6 +214,28 @@ async function init() {
                 }
             } catch (_) {}
         }
+    } else if (MODE === 'edit_scan' && SCAN_REF) {
+        try {
+            const res = await fetch(`/api/scans/${encodeURIComponent(SCAN_REF)}/detail`);
+            const json = await res.json();
+            if (json.success) {
+                currentScan = json.data;
+                prefillForm(json.data);
+                initial = { type: 'ip', value: json.data.target || '' };
+            }
+        } catch (_) {
+            try {
+                const res2 = await fetch('/api/scans');
+                const json2 = await res2.json();
+                if (json2.success) {
+                    currentScan = json2.data.find(s => s.ref === SCAN_REF);
+                    if (currentScan) {
+                        prefillForm(currentScan);
+                        initial = { type: 'ip', value: currentScan.target || '' };
+                    }
+                }
+            } catch (_) {}
+        }
     }
 
     // Mount target picker
@@ -238,6 +265,50 @@ function prefillForm(scan) {
         }
     }
     if (t('f-active') && scan.active !== undefined) t('f-active').checked = scan.active;
+
+    // Schedule fields — parse the human-readable schedule string
+    const sched = (scan.schedule || '').toLowerCase();
+    if (sched && t('f-occurrence')) {
+        if (sched.startsWith('weekly')) {
+            t('f-occurrence').value = 'weekly';
+            // Parse weekdays from "Weekly (Mon,Wed,Fri)" or "Weekly (monday,friday)"
+            const match = sched.match(/\(([^)]+)\)/);
+            if (match) {
+                const dayMap = {sun:'sunday',mon:'monday',tue:'tuesday',wed:'wednesday',thu:'thursday',fri:'friday',sat:'saturday'};
+                const dayStr = match[1].toLowerCase();
+                document.querySelectorAll('.weekday-cb').forEach(cb => {
+                    const short = cb.value.slice(0, 3);
+                    cb.checked = dayStr.includes(cb.value) || dayStr.includes(short);
+                });
+            }
+            const wMatch = sched.match(/every (\d+) week/);
+            if (wMatch && t('f-freq-weeks')) t('f-freq-weeks').value = wMatch[1];
+        } else if (sched.startsWith('monthly')) {
+            t('f-occurrence').value = 'monthly';
+            const mMatch = sched.match(/(\d+)/);
+            if (mMatch && t('f-day-of-month')) t('f-day-of-month').value = mMatch[1];
+        } else {
+            t('f-occurrence').value = 'daily';
+            const dMatch = sched.match(/every (\d+) day/);
+            if (dMatch && t('f-freq-days')) t('f-freq-days').value = dMatch[1];
+        }
+        toggleScheduleFields();
+    }
+
+    // Start date/time — derive from next_launch or last_launch
+    const launchStr = scan.next_launch || scan.last_launch || '';
+    if (launchStr && t('f-start-date')) {
+        try {
+            let s = launchStr.trim().replace(/\//g, '-');
+            if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+            const d = new Date(s);
+            if (!isNaN(d.getTime())) {
+                t('f-start-date').value = d.toISOString().slice(0, 10);
+                if (t('f-start-hour')) t('f-start-hour').value = d.getUTCHours();
+                if (t('f-start-minute')) t('f-start-minute').value = d.getUTCMinutes();
+            }
+        } catch (_) {}
+    }
 }
 
 function toggleScheduleFields() {
@@ -265,7 +336,7 @@ function buildPayload() {
     const payload = { title, target, option_profile: optionProfile };
     if (scanner) payload.scanner = scanner;
 
-    if (MODE !== 'launch') {
+    if (MODE !== 'launch' && MODE !== 'edit_scan') {
         const occ = document.getElementById('f-occurrence').value;
         const startDate = document.getElementById('f-start-date').value;
         if (!startDate) { showToast('Start date is required', 'error'); return null; }
@@ -298,7 +369,7 @@ async function submitForm() {
     if (!payload) return;
 
     let body;
-    if (MODE === 'launch') {
+    if (MODE === 'launch' || MODE === 'edit_scan') {
         body = { action: 'launch', scan_ref: '__launch__', payload, reason };
     } else if (MODE === 'edit_scheduled') {
         const current = currentScan || {};
