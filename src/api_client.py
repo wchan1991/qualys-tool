@@ -251,7 +251,18 @@ class QualysClient:
             
             if response.status_code >= 400:
                 raise QualysError(self._parse_error(response.text), response.status_code)
-            
+
+            # Detect HTML responses (e.g. login redirects, captcha pages)
+            ct = (response.headers.get("Content-Type") or "").lower()
+            body_start = response.text.strip()[:50].lower()
+            if "text/html" in ct or body_start.startswith("<!doctype") or body_start.startswith("<html"):
+                raise QualysError(
+                    "Qualys API returned an HTML page instead of XML/JSON. "
+                    "This usually means a session redirect, CAPTCHA, or maintenance page. "
+                    "Try logging into the Qualys portal manually first.",
+                    response.status_code,
+                )
+
             return response
             
         except requests.Timeout:

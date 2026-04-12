@@ -92,6 +92,7 @@ _ALLOWED_DURING_INIT = {
     "/api/refresh-all",
     "/api/target-sources",
     "/api/backups",
+    "/api/offline-mode",
 }
 
 
@@ -110,13 +111,28 @@ def _perform_startup_backup() -> None:
         dest = BACKUP_DIR / f"qualys_scans_{stamp}.db"
         shutil.copy2(db_path, dest)
         logger.info(f"Startup backup created: {dest}")
-        # Retain only the most recent backups
-        backups = sorted(BACKUP_DIR.glob("qualys_scans_*.db"), reverse=True)
-        for old in backups[MAX_BACKUPS:]:
-            old.unlink()
-            logger.info(f"Deleted old backup: {old.name}")
     except Exception as e:
         logger.warning(f"Could not create startup backup: {e}")
+
+    # Prune old backups — each deletion is independent so one locked file
+    # (common on Windows with Flask reloader) doesn't block the rest.
+    _prune_old_backups()
+
+
+def _prune_old_backups() -> None:
+    """Keep only the most recent MAX_BACKUPS backup files."""
+    try:
+        if not BACKUP_DIR.exists():
+            return
+        backups = sorted(BACKUP_DIR.glob("qualys_scans_*.db"), reverse=True)
+        for old in backups[MAX_BACKUPS:]:
+            try:
+                old.unlink()
+                logger.info(f"Deleted old backup: {old.name}")
+            except Exception as e:
+                logger.debug(f"Could not delete backup {old.name}: {e}")
+    except Exception as e:
+        logger.warning(f"Backup pruning failed: {e}")
 
 
 @app.before_request
@@ -815,6 +831,57 @@ def api_restore_backup(filename):
     shutil.copy2(src, db_path)
     logger.info(f"Restored backup: {filename}")
     return {"restored": filename}
+
+
+@app.route("/api/backups/<filename>", methods=["DELETE"])
+@api_response
+def api_delete_backup(filename):
+    """Delete a single backup file."""
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise ValueError("Invalid filename")
+    src = BACKUP_DIR / filename
+    if not src.exists():
+        raise FileNotFoundError(f"Backup not found: {filename}")
+    src.unlink()
+    logger.info(f"Deleted backup: {filename}")
+    return {"deleted": filename}
+
+
+@app.route("/api/backups/prune", methods=["POST"])
+@api_response
+def api_prune_backups():
+    """Prune backups to keep only the most recent MAX_BACKUPS."""
+    _prune_old_backups()
+    # Return the count of remaining backups
+    remaining = list(BACKUP_DIR.glob("qualys_scans_*.db")) if BACKUP_DIR.exists() else []
+    deleted = max(0, len(remaining) - MAX_BACKUPS)  # approximate
+    return {"kept": min(len(remaining), MAX_BACKUPS), "deleted": deleted}
+
+
+@app.route("/api/offline-mode", methods=["POST"])
+@api_response
+def api_enter_offline_mode():
+    """Manually enter offline mode from the init page."""
+    global _offline_mode, _manager
+    _offline_mode = True
+    # Restore the most recent backup if available
+    if BACKUP_DIR.exists():
+        backups = sorted(BACKUP_DIR.glob("qualys_scans_*.db"), reverse=True)
+        if backups:
+            try:
+                if _manager is not None:
+                    try:
+                        _manager.db.close()
+                    except Exception:
+                        pass
+                    _manager = None
+                db_path = Path(get_config().db_path)
+                shutil.copy2(backups[0], db_path)
+                logger.info(f"Restored backup for offline mode: {backups[0].name}")
+            except Exception as e:
+                logger.warning(f"Could not restore backup: {e}")
+    logger.info("Manually entered offline mode")
+    return {"offline": True}
 
 
 # ============================================================
