@@ -33,6 +33,8 @@ Changes and feature requests for the Qualys Scan Manager.
 
 <!-- Items currently being worked on -->
 
+<!-- REQ-008 and REQ-009 moved to Done -->
+
 ## Done
 
 ### [REQ-001] Improve non-scheduled scans table formatting
@@ -86,3 +88,22 @@ Changes and feature requests for the Qualys Scan Manager.
   - CSV export via "Export CSV" button
   - Added `applied_at` column to `staged_changes` via migration
   - Persists across restarts (uses existing `staged_changes` table with `applied = 1`)
+
+### [REQ-008] Bulk select by group for scheduled scans
+- **Type:** Feature
+- **Priority:** High
+- **Completed:** 2026-04-12
+- **Summary:**
+  - Added group-header checkboxes to scheduled scans page (matching non-scheduled scans)
+  - Checkbox selects/deselects all scans in that status group
+  - Group checkbox syncs with individual row selections (supports indeterminate state)
+  - Existing bulk actions (Activate, Deactivate, Change Profile, Delete) work with group selections
+
+### [REQ-009] Fix edit form not prefilling when detail API fails
+- **Type:** Bug
+- **Priority:** High
+- **Completed:** 2026-04-12
+- **Summary:**
+  - Fixed fallback logic in `scan_form.html` — the `/api/scheduled` (or `/api/scans`) list endpoint now runs as fallback whenever the detail API returns `{success: false}`, not only on network exceptions
+  - Fixes the blank edit form in offline mode where the Qualys API detail call fails but doesn't throw
+  - Both scheduled and non-scheduled edit paths fixed with the same pattern

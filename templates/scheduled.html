@@ -252,11 +252,16 @@
             const collapsed = collapsedGroupsSched.has(key);
             const caret = collapsed ? '▸' : '▾';
             html.push(`
-                <tr class="group-header" data-group="${key}" onclick="toggleSchedGroup('${key}')">
+                <tr class="group-header" data-group="${key}">
                     <td colspan="8">
-                        <span class="group-caret">${caret}</span>
-                        ${escapeHtml(SCHED_GROUP_LABELS[key])}
-                        <span class="group-count">(${bucket.length})</span>
+                        <div style="display:flex;align-items:center;gap:0.5rem">
+                            <input type="checkbox" class="group-cb" data-group="${key}" onclick="toggleGroupSelect(event, '${key}')" title="Select all ${key}">
+                            <span style="cursor:pointer;flex:1" onclick="toggleSchedGroup('${key}')">
+                                <span class="group-caret">${caret}</span>
+                                ${escapeHtml(SCHED_GROUP_LABELS[key])}
+                                <span class="group-count">(${bucket.length})</span>
+                            </span>
+                        </div>
                     </td>
                 </tr>
             `);
@@ -363,6 +368,15 @@
         bar.classList.toggle('hidden', checked.length === 0);
         document.getElementById('select-all').indeterminate =
             checked.length > 0 && checked.length < document.querySelectorAll('.row-cb').length;
+
+        // Sync group-header checkboxes
+        document.querySelectorAll('.group-cb').forEach(gcb => {
+            const groupKey = gcb.dataset.group;
+            const groupRows = document.querySelectorAll(`.group-${groupKey} .row-cb`);
+            const groupChecked = document.querySelectorAll(`.group-${groupKey} .row-cb:checked`);
+            gcb.checked = groupRows.length > 0 && groupChecked.length === groupRows.length;
+            gcb.indeterminate = groupChecked.length > 0 && groupChecked.length < groupRows.length;
+        });
     }
 
     function toggleSelectAll(master) {
@@ -374,7 +388,17 @@
         document.querySelectorAll('.row-cb').forEach(cb => { cb.checked = false; });
         const sa = document.getElementById('select-all');
         if (sa) { sa.checked = false; sa.indeterminate = false; }
+        document.querySelectorAll('.group-cb').forEach(cb => { cb.checked = false; });
         document.getElementById('bulk-bar').classList.add('hidden');
+    }
+
+    function toggleGroupSelect(event, groupKey) {
+        event.stopPropagation();
+        const checked = event.target.checked;
+        document.querySelectorAll(`.group-${groupKey} .row-cb`).forEach(cb => {
+            cb.checked = checked;
+        });
+        onCheckboxChange();
     }
 
     // ── F18: Change Option Profile modal ──────────────────────

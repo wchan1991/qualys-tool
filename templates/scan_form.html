@@ -193,16 +193,20 @@ async function init() {
     // Load current scan data for edit mode
     let initial = {};
     if (MODE === 'edit_scheduled' && SCAN_ID) {
+        let loaded = false;
         try {
             const res = await fetch(`/api/scheduled/${encodeURIComponent(SCAN_ID)}/detail`);
             const json = await res.json();
-            if (json.success) {
+            if (json.success && json.data) {
                 currentScan = json.data;
                 prefillForm(json.data);
                 updateEditTitle(json.data);
                 initial = { type: 'ip', value: json.data.target || '' };
+                loaded = true;
             }
-        } catch (_) {
+        } catch (_) {}
+        // Fallback: load from local DB list if detail API failed
+        if (!loaded) {
             try {
                 const res2 = await fetch('/api/scheduled');
                 const json2 = await res2.json();
@@ -217,16 +221,20 @@ async function init() {
             } catch (_) {}
         }
     } else if (MODE === 'edit_scan' && SCAN_REF) {
+        let loaded = false;
         try {
             const res = await fetch(`/api/scans/${encodeURIComponent(SCAN_REF)}/detail`);
             const json = await res.json();
-            if (json.success) {
+            if (json.success && json.data) {
                 currentScan = json.data;
                 prefillForm(json.data);
                 updateEditTitle(json.data);
                 initial = { type: 'ip', value: json.data.target || '' };
+                loaded = true;
             }
-        } catch (_) {
+        } catch (_) {}
+        // Fallback: load from local DB list if detail API failed
+        if (!loaded) {
             try {
                 const res2 = await fetch('/api/scans');
                 const json2 = await res2.json();
