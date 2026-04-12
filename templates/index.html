@@ -299,59 +299,20 @@ async function loadTrafficChart(mode = 'past') {
 async function loadNext48h() {
     const container = document.getElementById('next-48h-card');
     try {
-        const res = await fetch('/api/scheduled');
+        const res = await fetch('/api/dashboard');
         const json = await res.json();
-        if (!json.success || !json.data.length) {
-            container.innerHTML = '<div class="text-muted text-center">No scheduled scans found.</div>';
+        if (!json.success) {
+            container.innerHTML = '<div class="text-muted text-center">Failed to load.</div>';
             return;
         }
-        const now = new Date();
-        const cutoff = new Date(now.getTime() + 48 * 3600000);
-        const upcoming = json.data
-            .filter(s => s.active && s.next_launch)
-            .filter(s => {
-                const d = new Date(s.next_launch);
-                return d >= now && d <= cutoff;
-            })
-            .sort((a, b) => new Date(a.next_launch) - new Date(b.next_launch));
-
-        if (!upcoming.length) {
-            container.innerHTML = '<div class="text-muted text-center">No scans launching in the next 48 hours.</div>';
-            return;
-        }
-
-        const count = upcoming.length;
-        const listHtml = upcoming.slice(0, 5).map(s => {
-            const d = new Date(s.next_launch);
-            const diffMs = d - now;
-            const diffH = Math.floor(diffMs / 3600000);
-            const diffM = Math.floor((diffMs % 3600000) / 60000);
-            const countdown = `${diffH > 0 ? diffH + 'h ' : ''}${diffM}m`;
-            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-color)">
-                <div style="flex:1;min-width:0">
-                    <a href="/scheduled/${encodeURIComponent(s.id)}" style="text-decoration:none">
-                        <strong style="color:var(--text-primary)">${escapeHtml(s.title || 'Untitled')}</strong>
-                    </a>
-                    <div class="text-muted" style="font-size:11px">${escapeHtml(s.target || '')}</div>
-                </div>
-                <div style="text-align:right;white-space:nowrap;margin-left:12px">
-                    <div style="font-weight:600;color:var(--accent);font-size:14px">${countdown}</div>
-                    <div class="text-muted" style="font-size:11px">${formatDate(s.next_launch)}</div>
-                </div>
-            </div>`;
-        }).join('');
-
-        const moreHtml = count > 5 ? `<div class="text-muted" style="font-size:12px;margin-top:6px;text-align:center">… and ${count - 5} more</div>` : '';
-
+        const count = json.data.upcoming_48h ?? 0;
         container.innerHTML = `
-            <div style="display:flex;align-items:center;gap:1rem;margin-bottom:12px">
-                <div style="font-size:36px;font-weight:700;color:var(--accent)">${count}</div>
-                <div>
-                    <div style="font-weight:600">scan${count !== 1 ? 's' : ''} launching</div>
-                    <div class="text-muted" style="font-size:12px">in the next 48 hours</div>
+            <div class="results-summary">
+                <div class="result-stat" style="background:rgba(59,130,246,0.1);border-radius:var(--radius);cursor:pointer" onclick="loadTrafficChart('48')">
+                    <div class="result-value" style="color:var(--accent)">${count}</div>
+                    <div class="result-label">Scheduled Launches</div>
                 </div>
             </div>
-            ${listHtml}${moreHtml}
         `;
     } catch (e) {
         container.innerHTML = '<div class="text-muted text-center">Failed to load.</div>';
