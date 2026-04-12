@@ -54,12 +54,17 @@ body {
     align-items: center;
     gap: 24px;
     padding: 12px 24px;
-    background: var(--bg-primary);
-    border-bottom: 1px solid var(--border-color);
-    box-shadow: var(--shadow);
+    background: #1e3a5f;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     position: sticky;
     top: 0;
     z-index: 100;
+}
+
+[data-theme="dark"] .navbar {
+    background: #162d4a;
+    border-bottom-color: rgba(255, 255, 255, 0.08);
 }
 
 .nav-brand {
@@ -68,6 +73,7 @@ body {
     gap: 8px;
     font-weight: 600;
     font-size: 16px;
+    color: #ffffff;
 }
 
 .nav-icon {
@@ -85,20 +91,20 @@ body {
     align-items: center;
     gap: 6px;
     padding: 8px 16px;
-    color: var(--text-secondary);
+    color: rgba(255, 255, 255, 0.7);
     text-decoration: none;
     border-radius: var(--radius);
     transition: all 0.15s;
 }
 
 .nav-link:hover {
-    color: var(--text-primary);
-    background: var(--bg-tertiary);
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
 }
 
 .nav-link.active {
-    color: var(--accent);
-    background: rgba(59, 130, 246, 0.1);
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.15);
 }
 
 .nav-actions {
@@ -292,6 +298,15 @@ body {
     padding: 8px;
     background: transparent;
     border: none;
+}
+
+.navbar .btn-icon {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.navbar .btn-icon:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
 }
 
 /* Inputs */
