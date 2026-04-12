@@ -162,3 +162,14 @@ Changes and feature requests for the Qualys Scan Manager.
     - **Next Scheduled Scan**: Shows the soonest active scheduled scan with title, schedule, target, countdown timer, and launch date
     - **Past 24 Hours**: Shows succeeded (Finished) vs failed (Error/Canceled) scan counts from the last 24 hours
   - Both cards refresh when "Refresh All from Qualys" is clicked
+
+### [REQ-016] Dashboard — Unified Scan Timeline, failed markers, drill-down
+- **Type:** Enhancement
+- **Priority:** High
+- **Completed:** 2026-04-12
+- **Summary:**
+  - Replaced separate "Recent Scans" and "Upcoming Scheduled Scans" tables with a unified "📋 Scan Timeline" showing last 10 on-demand scans and next 10 upcoming scheduled scans, with directional arrows (◀/▶), type badges, and section headers
+  - Added red failed scan markers on the activity chart: dashed red line with large red dots at hours where scans failed (Error/Canceled)
+  - Past 24h drill-down panel (Succeeded/Failed click-through) moved inside the Scan Timeline card with smooth scroll-to behavior
+  - "Launching Next 48h" card simplified to show count only
+  - Chart legend auto-shows when failed overlay dataset is present

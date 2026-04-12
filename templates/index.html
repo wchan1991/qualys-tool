@@ -23,7 +23,7 @@
 </div>
 {% endif %}
 
-<!-- Scans Metrics (F25: clickable → Lookup pre-filtered) -->
+<!-- Scans Metrics -->
 <h3 class="section-title">🔍 Non-Scheduled Scans</h3>
 <div class="metrics-grid" id="metrics">
     <div class="metric-card metric-clickable" onclick="goToLookup('all')" title="View all scans in Lookup">
@@ -44,7 +44,7 @@
     </div>
 </div>
 
-<!-- Scheduled Scans Metrics (F25: clickable) -->
+<!-- Scheduled Scans Metrics -->
 <h3 class="section-title">📅 Scheduled Scans</h3>
 <div class="metrics-grid" id="scheduled-metrics">
     <div class="metric-card metric-clickable" onclick="goToLookup('all')" title="View all scheduled in Lookup">
@@ -85,32 +85,11 @@
                     <div class="result-label">Failed</div>
                 </div>
             </div>
-            <!-- Drill-down table (hidden until clicked) -->
-            <div id="past-24h-detail" class="hidden" style="margin-top:1rem">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <h4 id="past-24h-detail-title" style="margin:0;font-size:14px"></h4>
-                    <button class="btn btn-sm btn-secondary" onclick="closePast24hDetail()">✕ Close</button>
-                </div>
-                <div class="table-scroll-wrap">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Status</th>
-                                <th>Title</th>
-                                <th>Target</th>
-                                <th>Launched</th>
-                                <th>Hosts</th>
-                            </tr>
-                        </thead>
-                        <tbody id="past-24h-detail-tbody"></tbody>
-                    </table>
-                </div>
-            </div>
         </div>
     </div>
 </div>
 
-<!-- Scan Traffic / Forecast Chart (F6 + F20) -->
+<!-- Scan Activity Chart -->
 <div class="card" style="margin-bottom:24px">
     <div class="card-header" style="flex-wrap:wrap;gap:0.5rem">
         <h2 id="chart-title">📈 Scan Activity — Past 24 hours</h2>
@@ -129,50 +108,52 @@
     </div>
 </div>
 
-<!-- Recent Scans table -->
+<!-- Scan Timeline — unified view of recent + upcoming -->
 <div class="card" style="margin-bottom:24px">
-    <div class="card-header">
-        <h2>Recent Scans (last 6 hours)</h2>
-        <a href="{{ url_for('scans_page') }}" class="btn btn-secondary btn-sm">View All →</a>
+    <div class="card-header" style="flex-wrap:wrap;gap:0.5rem">
+        <h2>📋 Scan Timeline</h2>
+        <div style="display:flex;gap:6px">
+            <a href="{{ url_for('scans_page') }}" class="btn btn-secondary btn-sm">All Scans →</a>
+            <a href="{{ url_for('scheduled_page') }}" class="btn btn-secondary btn-sm">All Scheduled →</a>
+        </div>
     </div>
-    <div class="card-body">
+    <div class="card-body" style="padding:0">
+        <!-- Past 24h drill-down panel (shown when clicking Succeeded/Failed cards) -->
+        <div id="past-24h-detail" class="hidden" style="padding:20px;border-bottom:1px solid var(--border-color);background:var(--bg-secondary)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <h3 id="past-24h-detail-title" style="margin:0;font-size:15px"></h3>
+                <button class="btn btn-sm btn-secondary" onclick="closePast24hDetail()">✕ Close</button>
+            </div>
+            <div class="table-scroll-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Title</th>
+                            <th>Target</th>
+                            <th>Launched</th>
+                            <th>Hosts</th>
+                        </tr>
+                    </thead>
+                    <tbody id="past-24h-detail-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+
         <div class="table-scroll-wrap">
-            <table class="table" id="recent-scans-table">
+            <table class="data-table" id="timeline-table">
                 <thead>
                     <tr>
+                        <th style="width:50px"></th>
                         <th>Status</th>
                         <th>Title</th>
                         <th>Target</th>
-                        <th>Launched</th>
+                        <th>Time</th>
+                        <th>Type</th>
                     </tr>
                 </thead>
-                <tbody id="recent-scans">
-                    <tr><td colspan="4" class="text-muted text-center">Loading...</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-
-<!-- Upcoming Scheduled Scans table -->
-<div class="card">
-    <div class="card-header">
-        <h2>Upcoming Scheduled Scans</h2>
-        <a href="{{ url_for('scheduled_page') }}" class="btn btn-secondary btn-sm">View All →</a>
-    </div>
-    <div class="card-body">
-        <div class="table-scroll-wrap">
-            <table class="table" id="upcoming-scans-table">
-                <thead>
-                    <tr>
-                        <th>Status</th>
-                        <th>Title</th>
-                        <th>Next Launch</th>
-                        <th>Schedule</th>
-                    </tr>
-                </thead>
-                <tbody id="upcoming-scans">
-                    <tr><td colspan="4" class="text-muted text-center">Loading...</td></tr>
+                <tbody id="timeline-tbody">
+                    <tr><td colspan="6" class="text-muted text-center">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -183,10 +164,10 @@
 {% block scripts %}
 <script>
 let _trafficChart = null;
-let _chartMode = 'past';  // 'past' | '24' | '48' | '72'
-let _past24hScans = [];   // cached for drill-down
+let _chartMode = 'past';
+let _past24hScans = [];
+let _failedHours = {};  // hour → count of failed scans, for chart overlay
 
-// F25: navigate to the lookup page with a status pre-applied
 function goToLookup(status) {
     window.location.href = `/lookup?type=status&value=${encodeURIComponent(status)}`;
 }
@@ -195,8 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
     loadNext48h();
     loadPast24hResults();
-    loadRecentScans();
-    loadUpcomingScans();
+    loadTimeline();
     loadTrafficChart('past');
 });
 
@@ -221,7 +201,6 @@ async function loadDashboard() {
 
 async function loadTrafficChart(mode = 'past') {
     _chartMode = mode;
-    // Toggle active button state
     document.querySelectorAll('.chart-mode-btn').forEach(btn => {
         const active = btn.dataset.mode === mode;
         btn.classList.toggle('active', active);
@@ -261,23 +240,47 @@ async function loadTrafficChart(mode = 'past') {
         const label = isForecast ? 'Scheduled launches' : 'Scans launched';
         const ctx = document.getElementById('traffic-chart').getContext('2d');
 
-        _trafficChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [{
-                    label,
-                    data: counts,
-                    borderColor: isForecast ? '#16a34a' : '#3b82f6',
-                    backgroundColor: isForecast ? 'rgba(22,163,74,0.12)' : 'rgba(59,130,246,0.12)',
+        // Build datasets — main line + failed overlay for past mode
+        const datasets = [{
+            label,
+            data: counts,
+            borderColor: isForecast ? '#16a34a' : '#3b82f6',
+            backgroundColor: isForecast ? 'rgba(22,163,74,0.12)' : 'rgba(59,130,246,0.12)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 3,
+        }];
+
+        // For past mode, overlay red markers where scans failed
+        if (mode === 'past' && Object.keys(_failedHours).length) {
+            const failedCounts = labels.map(h => _failedHours[h] || 0);
+            const hasAny = failedCounts.some(c => c > 0);
+            if (hasAny) {
+                datasets.push({
+                    label: 'Failed scans',
+                    data: failedCounts,
+                    borderColor: '#ef4444',
+                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
                     fill: true,
                     tension: 0.3,
-                    pointRadius: 3,
-                }]
-            },
+                    pointRadius: failedCounts.map(c => c > 0 ? 6 : 0),
+                    pointBackgroundColor: '#ef4444',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    borderWidth: 2,
+                    borderDash: [4, 4],
+                });
+            }
+        }
+
+        _trafficChart = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
             options: {
                 responsive: true,
-                plugins: { legend: { display: false } },
+                plugins: {
+                    legend: { display: datasets.length > 1, position: 'top' },
+                },
                 scales: {
                     y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } },
                     x: {
@@ -327,13 +330,35 @@ async function loadPast24hResults() {
         _past24hScans = json.data;
         let succeeded = 0;
         let failed = 0;
+
+        // Build failed-hours map for chart overlay
+        _failedHours = {};
         for (const s of _past24hScans) {
             const st = (s.status || '').toLowerCase();
-            if (st === 'finished') succeeded++;
-            else if (st === 'error' || st === 'canceled') failed++;
+            if (st === 'finished') {
+                succeeded++;
+            } else if (st === 'error' || st === 'canceled') {
+                failed++;
+                // Bucket by hour for chart overlay
+                if (s.launched) {
+                    try {
+                        const d = new Date(s.launched.replace(/\//g, '-'));
+                        const hourKey = d.getFullYear() + '-'
+                            + String(d.getMonth()+1).padStart(2,'0') + '-'
+                            + String(d.getDate()).padStart(2,'0') + ' '
+                            + String(d.getHours()).padStart(2,'0') + ':00';
+                        _failedHours[hourKey] = (_failedHours[hourKey] || 0) + 1;
+                    } catch (_) {}
+                }
+            }
         }
         document.getElementById('past-24h-success').textContent = succeeded;
         document.getElementById('past-24h-failed').textContent = failed;
+
+        // Re-render chart if in past mode to show failed overlay
+        if (_chartMode === 'past') {
+            loadTrafficChart('past');
+        }
     } catch (e) {
         console.error('Failed to load 24h results:', e);
     }
@@ -346,10 +371,10 @@ function showPast24hDetail(filter) {
 
     let filtered;
     if (filter === 'finished') {
-        title.textContent = '✅ Succeeded Scans (Past 24h)';
+        title.textContent = '✅ Succeeded Scans — Past 24 Hours';
         filtered = _past24hScans.filter(s => (s.status || '').toLowerCase() === 'finished');
     } else {
-        title.textContent = '❌ Failed Scans (Past 24h)';
+        title.textContent = '❌ Failed Scans — Past 24 Hours';
         filtered = _past24hScans.filter(s => {
             const st = (s.status || '').toLowerCase();
             return st === 'error' || st === 'canceled';
@@ -375,66 +400,96 @@ function showPast24hDetail(filter) {
     }
 
     detail.classList.remove('hidden');
+    // Scroll to the detail panel
+    detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function closePast24hDetail() {
     document.getElementById('past-24h-detail').classList.add('hidden');
 }
 
-async function loadRecentScans() {
+async function loadTimeline() {
+    const tbody = document.getElementById('timeline-tbody');
     try {
-        // F13: "recent" on the Dashboard now means "last 6 hours"
-        const res = await fetch('/api/scans/recent?hours=6');
-        const json = await res.json();
-        const tbody = document.getElementById('recent-scans');
-        if (!json.success || !json.data || !json.data.length) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No scans launched in the last 6 hours.</td></tr>';
-            return;
-        }
-        const scans = json.data.slice(0, 10);
-        tbody.innerHTML = scans.map(scan => `
-            <tr>
-                <td><span class="status-badge status-${(scan.status||'').toLowerCase()}">${escapeHtml(scan.status)}</span></td>
-                <td>
-                    <a href="/scans/${encodeURIComponent(scan.ref)}"><div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div></a>
-                    <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>
-                </td>
-                <td>${escapeHtml(scan.target || '')}</td>
-                <td>${formatDate(scan.launched)}</td>
-            </tr>
-        `).join('');
-    } catch (e) {
-        console.error('Failed to load scans:', e);
-    }
-}
+        // Fetch recent scans and scheduled scans in parallel
+        const [recentRes, schedRes] = await Promise.all([
+            fetch('/api/scans/recent?hours=24'),
+            fetch('/api/scheduled'),
+        ]);
+        const recentJson = await recentRes.json();
+        const schedJson = await schedRes.json();
 
-async function loadUpcomingScans() {
-    try {
-        const res = await fetch('/api/scheduled');
-        const json = await res.json();
-        const tbody = document.getElementById('upcoming-scans');
-        if (!json.success || !json.data.length) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No scheduled scans found. Click Refresh to fetch from Qualys.</td></tr>';
+        const rows = [];
+
+        // Past scans — last 10, sorted newest first
+        if (recentJson.success && recentJson.data) {
+            for (const s of recentJson.data.slice(0, 10)) {
+                const st = (s.status || '').toLowerCase();
+                rows.push({
+                    time: s.launched ? new Date(s.launched.replace(/\//g, '-')) : new Date(0),
+                    isPast: true,
+                    html: `<tr>
+                        <td style="text-align:center;color:var(--text-muted);font-size:18px" title="Completed scan">◀</td>
+                        <td><span class="status-badge status-${st}">${escapeHtml(s.status)}</span></td>
+                        <td><a href="/scans/${encodeURIComponent(s.ref)}">${escapeHtml(s.title || 'Untitled')}</a></td>
+                        <td class="target-cell">${escapeHtml(s.target || '')}</td>
+                        <td>${formatDate(s.launched)}</td>
+                        <td><span class="type-badge scan">On-demand</span></td>
+                    </tr>`
+                });
+            }
+        }
+
+        // Upcoming scheduled — next 10 with soonest first
+        if (schedJson.success && schedJson.data) {
+            const now = new Date();
+            const upcoming = schedJson.data
+                .filter(s => s.active && s.next_launch)
+                .sort((a, b) => new Date(a.next_launch) - new Date(b.next_launch))
+                .slice(0, 10);
+            for (const s of upcoming) {
+                rows.push({
+                    time: new Date(s.next_launch),
+                    isPast: false,
+                    html: `<tr style="opacity:0.85">
+                        <td style="text-align:center;color:var(--accent);font-size:18px" title="Upcoming scan">▶</td>
+                        <td><span class="status-badge status-active">Upcoming</span></td>
+                        <td><a href="/scheduled/${encodeURIComponent(s.id)}">${escapeHtml(s.title || 'Untitled')}</a></td>
+                        <td class="target-cell">${escapeHtml(s.target || '')}</td>
+                        <td>${formatDate(s.next_launch)}</td>
+                        <td><span class="type-badge scheduled">Scheduled</span></td>
+                    </tr>`
+                });
+            }
+        }
+
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">No scan data available. Click Refresh to fetch from Qualys.</td></tr>';
             return;
         }
-        const scans = json.data.filter(s => s.active).slice(0, 5);
-        if (!scans.length) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">No active scheduled scans.</td></tr>';
-            return;
+
+        // Sort: past scans first (newest at top), then a divider, then upcoming (soonest at top)
+        const pastRows = rows.filter(r => r.isPast).sort((a, b) => b.time - a.time);
+        const futureRows = rows.filter(r => !r.isPast).sort((a, b) => a.time - b.time);
+
+        let html = '';
+        if (pastRows.length) {
+            html += `<tr><td colspan="6" style="padding:8px 16px;font-weight:600;font-size:12px;text-transform:uppercase;color:var(--text-muted);background:var(--bg-secondary);letter-spacing:0.5px">
+                ◀ Recent Scans (last 24 hours)
+            </td></tr>`;
+            html += pastRows.map(r => r.html).join('');
         }
-        tbody.innerHTML = scans.map(scan => `
-            <tr>
-                <td><span class="status-badge status-running">Active</span></td>
-                <td>
-                    <a href="/scheduled/${encodeURIComponent(scan.id)}"><div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div></a>
-                    <div class="scan-ref">ID: ${escapeHtml(String(scan.id || ''))}</div>
-                </td>
-                <td>${formatDate(scan.next_launch)}</td>
-                <td>${escapeHtml(scan.schedule || '-')}</td>
-            </tr>
-        `).join('');
+        if (futureRows.length) {
+            html += `<tr><td colspan="6" style="padding:8px 16px;font-weight:600;font-size:12px;text-transform:uppercase;color:var(--text-muted);background:var(--bg-secondary);letter-spacing:0.5px">
+                ▶ Upcoming Scheduled Scans
+            </td></tr>`;
+            html += futureRows.map(r => r.html).join('');
+        }
+
+        tbody.innerHTML = html;
     } catch (e) {
-        console.error('Failed to load scheduled scans:', e);
+        console.error('Failed to load timeline:', e);
+        tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">Failed to load scan data.</td></tr>';
     }
 }
 
@@ -451,8 +506,7 @@ async function refreshAll() {
             loadDashboard();
             loadNext48h();
             loadPast24hResults();
-            loadRecentScans();
-            loadUpcomingScans();
+            loadTimeline();
             loadTrafficChart(_chartMode);
         } else {
             showToast(json.error || 'Refresh failed', 'error');
