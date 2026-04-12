@@ -108,35 +108,12 @@
     </div>
 </div>
 
-<!-- Past 24h drill-down (shown when clicking Succeeded/Failed cards) -->
-<div id="past-24h-detail" class="card hidden" style="margin-bottom:24px">
-    <div class="card-header">
-        <h2 id="past-24h-detail-title"></h2>
-        <button class="btn btn-sm btn-secondary" onclick="closePast24hDetail()">✕ Close</button>
-    </div>
-    <div class="card-body">
-        <div class="table-scroll-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Status</th>
-                        <th>Title</th>
-                        <th>Target</th>
-                        <th>Launched</th>
-                        <th>Hosts</th>
-                    </tr>
-                </thead>
-                <tbody id="past-24h-detail-tbody"></tbody>
-            </table>
-        </div>
-    </div>
-</div>
-
-<!-- Scan Timeline — last 5 + next 5 -->
+<!-- Scan Timeline — last 5 + next 5 + drill-down -->
 <div class="card" style="margin-bottom:24px">
     <div class="card-header" style="flex-wrap:wrap;gap:0.5rem">
-        <h2>📋 Scan Timeline</h2>
-        <div style="display:flex;gap:6px">
+        <h2 id="timeline-heading">📋 Scan Timeline</h2>
+        <div style="display:flex;gap:6px;align-items:center">
+            <button id="timeline-close-btn" class="btn btn-sm btn-secondary hidden" onclick="closePast24hDetail()">✕ Back to Timeline</button>
             <a href="{{ url_for('scans_page') }}" class="btn btn-secondary btn-sm">All Scans →</a>
             <a href="{{ url_for('scheduled_page') }}" class="btn btn-secondary btn-sm">All Scheduled →</a>
         </div>
@@ -144,7 +121,7 @@
     <div class="card-body">
         <div class="table-scroll-wrap">
             <table class="data-table" id="timeline-table">
-                <thead>
+                <thead id="timeline-thead">
                     <tr>
                         <th style="width:40px"></th>
                         <th>Status</th>
@@ -168,7 +145,8 @@
 let _trafficChart = null;
 let _chartMode = 'past';
 let _past24hScans = [];
-let _failedHours = {};  // hour → count of failed scans, for chart overlay
+let _failedSpans = [];   // [{startHour, endHour}] for each failed scan
+let _timelineCache = '';  // cached timeline HTML to restore after drill-down
 
 function goToLookup(status) {
     window.location.href = `/lookup?type=status&value=${encodeURIComponent(status)}`;
@@ -242,7 +220,7 @@ async function loadTrafficChart(mode = 'past') {
         const label = isForecast ? 'Scheduled launches' : 'Scans launched';
         const ctx = document.getElementById('traffic-chart').getContext('2d');
 
-        // Build datasets — main line + failed overlay for past mode
+        // Build datasets — main line + failed dot-pairs for past mode
         const datasets = [{
             label,
             data: counts,
@@ -253,27 +231,37 @@ async function loadTrafficChart(mode = 'past') {
             pointRadius: 3,
         }];
 
-        // For past mode, overlay red markers where scans failed
-        if (mode === 'past' && Object.keys(_failedHours).length) {
-            const failedCounts = labels.map(h => _failedHours[h] || 0);
-            const hasAny = failedCounts.some(c => c > 0);
-            if (hasAny) {
+        // For past mode, overlay red dot-pairs for each failed scan (start → end)
+        if (mode === 'past' && _failedSpans.length) {
+            for (const span of _failedSpans) {
+                const startIdx = labels.indexOf(span.startHour);
+                const endIdx = labels.indexOf(span.endHour);
+                if (startIdx === -1 && endIdx === -1) continue;
+                // Build sparse data: null everywhere except start and end dots
+                const dotData = labels.map((_, i) => {
+                    if (i === startIdx || i === endIdx) return 0.15;  // slight y offset so dots sit above axis
+                    return null;
+                });
                 datasets.push({
-                    label: 'Failed scans',
-                    data: failedCounts,
+                    label: span.title,
+                    data: dotData,
                     borderColor: '#ef4444',
-                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                    fill: true,
-                    tension: 0.3,
-                    pointRadius: failedCounts.map(c => c > 0 ? 6 : 0),
+                    backgroundColor: 'transparent',
+                    fill: false,
+                    tension: 0,
+                    spanGaps: true,
+                    borderWidth: 2,
+                    borderDash: [4, 3],
+                    pointRadius: dotData.map(v => v !== null ? 6 : 0),
                     pointBackgroundColor: '#ef4444',
                     pointBorderColor: '#fff',
                     pointBorderWidth: 2,
-                    borderWidth: 2,
-                    borderDash: [4, 4],
+                    pointHoverRadius: 8,
                 });
             }
         }
+
+        const hasLegend = datasets.length > 1;
 
         _trafficChart = new Chart(ctx, {
             type: 'line',
@@ -281,7 +269,7 @@ async function loadTrafficChart(mode = 'past') {
             options: {
                 responsive: true,
                 plugins: {
-                    legend: { display: datasets.length > 1, position: 'top' },
+                    legend: { display: hasLegend, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
                 },
                 scales: {
                     y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } },
@@ -333,8 +321,8 @@ async function loadPast24hResults() {
         let succeeded = 0;
         let failed = 0;
 
-        // Build failed-hours map for chart overlay (key must match chart label format: "HH:00")
-        _failedHours = {};
+        // Build failed-spans for chart overlay (start dot → end dot per failed scan)
+        _failedSpans = [];
         for (const s of _past24hScans) {
             const st = (s.status || '').toLowerCase();
             if (st === 'finished') {
@@ -343,9 +331,21 @@ async function loadPast24hResults() {
                 failed++;
                 if (s.launched) {
                     try {
-                        const d = new Date(s.launched.replace(/\//g, '-'));
-                        const hourKey = String(d.getHours()).padStart(2,'0') + ':00';
-                        _failedHours[hourKey] = (_failedHours[hourKey] || 0) + 1;
+                        const start = new Date(s.launched.replace(/\//g, '-'));
+                        const startHour = String(start.getHours()).padStart(2,'0') + ':00';
+                        // Compute end hour from duration (HH:MM:SS)
+                        let endHour = startHour;
+                        if (s.duration) {
+                            const parts = s.duration.split(':').map(Number);
+                            const durMs = ((parts[0]||0)*3600 + (parts[1]||0)*60 + (parts[2]||0)) * 1000;
+                            const end = new Date(start.getTime() + durMs);
+                            endHour = String(end.getHours()).padStart(2,'0') + ':00';
+                        }
+                        _failedSpans.push({
+                            startHour,
+                            endHour,
+                            title: s.title || 'Failed scan',
+                        });
                     } catch (_) {}
                 }
             }
@@ -363,29 +363,45 @@ async function loadPast24hResults() {
 }
 
 function showPast24hDetail(filter) {
-    const detail = document.getElementById('past-24h-detail');
-    const title = document.getElementById('past-24h-detail-title');
-    const tbody = document.getElementById('past-24h-detail-tbody');
+    const heading = document.getElementById('timeline-heading');
+    const thead = document.getElementById('timeline-thead');
+    const tbody = document.getElementById('timeline-tbody');
+    const closeBtn = document.getElementById('timeline-close-btn');
 
-    // Ensure chart shows past 24h with red markers
+    // Ensure chart shows past 24h with failure markers
     if (_chartMode !== 'past') {
         loadTrafficChart('past');
     }
 
+    // Cache current timeline so we can restore it
+    if (!_timelineCache) {
+        _timelineCache = tbody.innerHTML;
+    }
+
     let filtered;
     if (filter === 'finished') {
-        title.textContent = '✅ Succeeded Scans — Past 24 Hours';
+        heading.textContent = '✅ Succeeded Scans — Past 24 Hours';
         filtered = _past24hScans.filter(s => (s.status || '').toLowerCase() === 'finished');
     } else {
-        title.textContent = '❌ Failed Scans — Past 24 Hours';
+        heading.textContent = '❌ Failed Scans — Past 24 Hours';
         filtered = _past24hScans.filter(s => {
             const st = (s.status || '').toLowerCase();
             return st === 'error' || st === 'canceled';
         });
     }
 
+    // Swap table header for drill-down columns
+    thead.innerHTML = `<tr>
+        <th>Status</th>
+        <th>Title</th>
+        <th>Target</th>
+        <th>Launched</th>
+        <th>Duration</th>
+        <th>Hosts</th>
+    </tr>`;
+
     if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="5" class="text-muted text-center">No ${filter === 'finished' ? 'succeeded' : 'failed'} scans in the past 24 hours.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="text-muted text-center">No ${filter === 'finished' ? 'succeeded' : 'failed'} scans in the past 24 hours.</td></tr>`;
     } else {
         tbody.innerHTML = filtered.map(s => {
             const st = (s.status || '').toLowerCase();
@@ -397,17 +413,39 @@ function showPast24hDetail(filter) {
                 <td><a href="/scans/${encodeURIComponent(s.ref)}">${escapeHtml(s.title || 'Untitled')}</a></td>
                 <td class="target-cell">${escapeHtml(s.target || '')}</td>
                 <td>${formatDate(s.launched)}</td>
+                <td>${escapeHtml(s.duration || '—')}</td>
                 <td>${hostInfo}</td>
             </tr>`;
         }).join('');
     }
 
-    detail.classList.remove('hidden');
-    detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    closeBtn.classList.remove('hidden');
 }
 
 function closePast24hDetail() {
-    document.getElementById('past-24h-detail').classList.add('hidden');
+    const heading = document.getElementById('timeline-heading');
+    const thead = document.getElementById('timeline-thead');
+    const tbody = document.getElementById('timeline-tbody');
+    const closeBtn = document.getElementById('timeline-close-btn');
+
+    heading.textContent = '📋 Scan Timeline';
+    thead.innerHTML = `<tr>
+        <th style="width:40px"></th>
+        <th>Status</th>
+        <th>Title</th>
+        <th>Target</th>
+        <th>Time</th>
+        <th>Type</th>
+    </tr>`;
+
+    if (_timelineCache) {
+        tbody.innerHTML = _timelineCache;
+        _timelineCache = '';
+    } else {
+        loadTimeline();
+    }
+
+    closeBtn.classList.add('hidden');
 }
 
 async function loadTimeline() {
