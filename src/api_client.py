@@ -419,7 +419,11 @@ class QualysClient:
                     if ag.text and ag.text.strip():
                         asset_groups.append(ag.text.strip())
 
-                scans.append({
+                # Host processing counts (available on finished/error scans)
+                processed = self._xml_text(elem, "PROCESSED")
+                total_hosts = self._xml_text(elem, "TOTAL")
+
+                scan_data = {
                     "ref": self._xml_text(elem, "REF"),
                     "title": self._xml_text(elem, "TITLE"),
                     "type": self._xml_text(elem, "TYPE"),
@@ -430,7 +434,15 @@ class QualysClient:
                     "option_profile": self._xml_text(elem, "OPTION_PROFILE/TITLE"),
                     "tags": tags,
                     "asset_groups": asset_groups,
-                })
+                }
+
+                # Add host counts when available
+                if processed:
+                    scan_data["processed"] = int(processed)
+                if total_hosts:
+                    scan_data["total_hosts"] = int(total_hosts)
+
+                scans.append(scan_data)
         except ET.ParseError as e:
             logger.error(f"Failed to parse scan XML: {e}")
         return scans

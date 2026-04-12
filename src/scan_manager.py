@@ -80,8 +80,9 @@ class ScanManager:
             self.refresh_scans()
         
         records = self.db.get_latest_scans()
-        return [
-            {
+        results = []
+        for r in records:
+            entry = {
                 "ref": r.ref,
                 "title": r.title,
                 "target": r.target,
@@ -93,8 +94,17 @@ class ScanManager:
                 "tags": r.get_tags(),
                 "fetched_at": r.fetched_at,
             }
-            for r in records
-        ]
+            # Extract host counts from raw data when available
+            try:
+                raw = json.loads(r.raw_data) if r.raw_data else {}
+                if "processed" in raw:
+                    entry["processed"] = raw["processed"]
+                if "total_hosts" in raw:
+                    entry["total_hosts"] = raw["total_hosts"]
+            except (json.JSONDecodeError, TypeError):
+                pass
+            results.append(entry)
+        return results
     
     # ========================================================
     # SYNC OPERATIONS - SCHEDULED SCANS
@@ -812,18 +822,24 @@ class ScanManager:
         """Get dashboard metrics for both running and scheduled scans."""
         scans = self.get_scans()
         scheduled = self.get_scheduled_scans()
-        staged = self.get_staged_changes()
-        
+
         # Count running scans by status
         status_counts = {}
         for scan in scans:
             status = scan.get("status", "Unknown")
             status_counts[status] = status_counts.get(status, 0) + 1
-        
+
         # Count scheduled scans by active status
         active_scheduled = sum(1 for s in scheduled if s.get("active"))
         inactive_scheduled = len(scheduled) - active_scheduled
-        
+
+        # Count scheduled scan launches in the next 48 hours
+        try:
+            forecast_48h = self.get_launch_forecast(48)
+            upcoming_48h = sum(b["count"] for b in forecast_48h)
+        except Exception:
+            upcoming_48h = 0
+
         return {
             # Recent/running scans — Running and Queued removed per Feature 7
             "total_scans": len(scans),
@@ -834,8 +850,8 @@ class ScanManager:
             "total_scheduled": len(scheduled),
             "active_scheduled": active_scheduled,
             "inactive_scheduled": inactive_scheduled,
-            # Staging
-            "pending_changes": len(staged),
+            # Upcoming launches
+            "upcoming_48h": upcoming_48h,
             "last_refresh": scans[0]["fetched_at"] if scans else None,
         }
     

@@ -119,6 +119,45 @@ function renderDetail(scan) {
                 </table>
             </div>
         </div>
+
+        ${renderHostCounts(scan)}
+    `;
+}
+
+function renderHostCounts(scan) {
+    const status = (scan.status || '').toLowerCase();
+    if (status !== 'finished' && status !== 'error' && status !== 'canceled') return '';
+
+    const processed = scan.processed != null ? scan.processed : null;
+    const total = scan.total_hosts != null ? scan.total_hosts : null;
+
+    if (processed == null && total == null) return '';
+
+    const failed = (total != null && processed != null) ? (total - processed) : null;
+
+    return `
+        <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h2>📊 Scan Results</h2></div>
+            <div class="card-body">
+                <div class="results-summary">
+                    ${processed != null ? `
+                    <div class="result-stat result-success">
+                        <div class="result-value">${processed}</div>
+                        <div class="result-label">Hosts Scanned</div>
+                    </div>` : ''}
+                    ${failed != null ? `
+                    <div class="result-stat result-failed">
+                        <div class="result-value">${failed}</div>
+                        <div class="result-label">Hosts Failed</div>
+                    </div>` : ''}
+                    ${total != null ? `
+                    <div class="result-stat" style="background:var(--bg-tertiary);border-radius:var(--radius)">
+                        <div class="result-value" style="color:var(--text-primary)">${total}</div>
+                        <div class="result-label">Total Hosts</div>
+                    </div>` : ''}
+                </div>
+            </div>
+        </div>
     `;
 }
 

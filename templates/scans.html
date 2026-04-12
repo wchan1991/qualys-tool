@@ -170,10 +170,24 @@ function scanRowHTML(scan) {
         `;
     }
 
+    // Host count summary for finished/error/canceled scans
+    let hostInfo = '';
+    if ((status === 'finished' || status === 'error' || status === 'canceled') && scan.processed != null) {
+        const failed = scan.total_hosts != null ? (scan.total_hosts - scan.processed) : null;
+        hostInfo = `<div style="font-size:11px;margin-top:2px;color:var(--text-muted)">` +
+            `✓ ${scan.processed}` +
+            (failed != null && failed > 0 ? ` · ✗ ${failed}` : '') +
+            (scan.total_hosts != null ? ` / ${scan.total_hosts}` : '') +
+            `</div>`;
+    }
+
     return `
         <tr data-status="${status}" class="scan-row">
             <td><input type="checkbox" class="row-cb" data-ref="${escapeHtml(scan.ref)}" data-status="${status}" onchange="onCheckboxChange()"></td>
-            <td><span class="status-badge status-${status}">${escapeHtml(scan.status)}</span></td>
+            <td>
+                <span class="status-badge status-${status}">${escapeHtml(scan.status)}</span>
+                ${hostInfo}
+            </td>
             <td>
                 <a href="/scans/${encodeURIComponent(scan.ref)}"><div class="scan-title">${escapeHtml(scan.title || 'Untitled')}</div></a>
                 <div class="scan-ref">${escapeHtml(scan.ref || '')}</div>

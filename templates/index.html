@@ -59,9 +59,9 @@
         <div class="metric-label">Inactive</div>
         <div class="metric-value metric-warning" id="metric-scheduled-inactive">--</div>
     </div>
-    <div class="metric-card" title="Not clickable — internal queue of staged changes">
-        <div class="metric-label">Pending Changes</div>
-        <div class="metric-value metric-info" id="metric-pending">--</div>
+    <div class="metric-card metric-clickable" onclick="loadTrafficChart('48')" title="Scheduled scans launching in the next 48 hours">
+        <div class="metric-label">Launching Next 48h</div>
+        <div class="metric-value metric-info" id="metric-upcoming-48h">--</div>
     </div>
 </div>
 
@@ -165,7 +165,7 @@ async function loadDashboard() {
             document.getElementById('metric-scheduled-total').textContent = d.total_scheduled ?? '--';
             document.getElementById('metric-scheduled-active').textContent = d.active_scheduled ?? '--';
             document.getElementById('metric-scheduled-inactive').textContent = d.inactive_scheduled ?? '--';
-            document.getElementById('metric-pending').textContent = d.pending_changes ?? '--';
+            document.getElementById('metric-upcoming-48h').textContent = d.upcoming_48h ?? '--';
         }
     } catch (e) {
         console.error('Failed to load dashboard:', e);
@@ -215,15 +215,15 @@ async function loadTrafficChart(mode = 'past') {
         const ctx = document.getElementById('traffic-chart').getContext('2d');
 
         _trafficChart = new Chart(ctx, {
-            type: isForecast ? 'bar' : 'line',
+            type: 'line',
             data: {
                 labels,
                 datasets: [{
                     label,
                     data: counts,
                     borderColor: isForecast ? '#16a34a' : '#3b82f6',
-                    backgroundColor: isForecast ? 'rgba(22,163,74,0.5)' : 'rgba(59,130,246,0.12)',
-                    fill: !isForecast,
+                    backgroundColor: isForecast ? 'rgba(22,163,74,0.12)' : 'rgba(59,130,246,0.12)',
+                    fill: true,
                     tension: 0.3,
                     pointRadius: 3,
                 }]

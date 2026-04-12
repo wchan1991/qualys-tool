@@ -107,3 +107,32 @@ Changes and feature requests for the Qualys Scan Manager.
   - Fixed fallback logic in `scan_form.html` — the `/api/scheduled` (or `/api/scans`) list endpoint now runs as fallback whenever the detail API returns `{success: false}`, not only on network exceptions
   - Fixes the blank edit form in offline mode where the Qualys API detail call fails but doesn't throw
   - Both scheduled and non-scheduled edit paths fixed with the same pattern
+
+### [REQ-010] Replace "Pending Changes" with "Launching Next 48h"
+- **Type:** Enhancement
+- **Priority:** Medium
+- **Completed:** 2026-04-12
+- **Summary:**
+  - Replaced the "Pending Changes" metric card on the dashboard with "Launching Next 48h"
+  - Shows the count of scheduled scan launches projected for the next 48 hours
+  - Clicking the card switches the activity chart to the 48h forecast view
+  - Backend uses existing `get_launch_forecast(48)` to compute the total
+
+### [REQ-011] Line graph for all scan activity chart modes
+- **Type:** Enhancement
+- **Priority:** Low
+- **Completed:** 2026-04-12
+- **Summary:**
+  - Changed the scan activity chart from bar graph (for forecast modes) to line graph for all time settings
+  - All modes (Past 24h, Next 24/48/72h) now render as filled line charts with consistent styling
+  - Past uses blue, forecast uses green — both with area fill
+
+### [REQ-012] Show asset scan counts for completed scans
+- **Type:** Feature
+- **Priority:** High
+- **Completed:** 2026-04-12
+- **Summary:**
+  - Extended `_parse_scans()` in `api_client.py` to extract `PROCESSED` and `TOTAL` host count fields from Qualys XML
+  - Updated `get_scans()` and `get_recent_scans()` to include `processed` and `total_hosts` from raw data
+  - Scan detail page now shows a "Scan Results" card with Hosts Scanned / Hosts Failed / Total Hosts for finished/error/canceled scans
+  - Scan table rows show a compact host count indicator (e.g. "✓ 42 · ✗ 3 / 45") under the status badge

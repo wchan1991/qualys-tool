@@ -1114,7 +1114,7 @@ class ScanDatabase:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             if dt >= cutoff:
-                out.append({
+                entry = {
                     "ref": row["ref"],
                     "title": row["title"],
                     "target": row["target"],
@@ -1125,7 +1125,17 @@ class ScanDatabase:
                     "duration": row["duration"],
                     "tags": json.loads(row["tags"]) if row["tags"] else [],
                     "fetched_at": row["fetched_at"],
-                })
+                }
+                # Extract host counts from raw data when available
+                try:
+                    raw = json.loads(row["raw_data"]) if row["raw_data"] else {}
+                    if "processed" in raw:
+                        entry["processed"] = raw["processed"]
+                    if "total_hosts" in raw:
+                        entry["total_hosts"] = raw["total_hosts"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                out.append(entry)
         return out
 
     def close(self) -> None:
