@@ -301,6 +301,12 @@ def scanners_page():
     return render_template("scanners.html")
 
 
+@app.route("/changelog")
+def changelog_page():
+    """Change history page."""
+    return render_template("changelog.html")
+
+
 # ============================================================
 # API ROUTES
 # ============================================================
@@ -454,6 +460,35 @@ def api_tags():
     """Get tag report."""
     manager = get_manager()
     return manager.get_tag_report()
+
+
+@app.route("/api/changelog")
+@api_response
+def api_changelog():
+    """Get applied change history."""
+    manager = get_manager()
+    return manager.db.get_changelog()
+
+
+@app.route("/api/changelog/csv")
+def api_changelog_csv():
+    """Export changelog as CSV."""
+    import csv
+    import io
+    manager = get_manager()
+    entries = manager.db.get_changelog()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Scan Ref", "Type", "Action", "Description", "Old Value", "New Value", "Staged At", "Applied At"])
+    for e in entries:
+        writer.writerow([
+            e["id"], e["scan_ref"], e["scan_type"], e["action"],
+            e["description"], e["old_value"], e["new_value"],
+            e["staged_at"], e["applied_at"],
+        ])
+    response = app.response_class(output.getvalue(), mimetype="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=changelog.csv"
+    return response
 
 
 @app.route("/api/scanners")

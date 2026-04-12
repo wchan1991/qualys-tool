@@ -27,33 +27,7 @@ Changes and feature requests for the Qualys Scan Manager.
 
 ## Approved
 
-### [REQ-005] Add "Running" and "Active" status filters to non-scheduled scans
-- **Type:** Enhancement
-- **Priority:** Medium
-- **Description:** The non-scheduled scans page status filter dropdown is missing "Running" and "Active" as filter options. Add these back so users can quickly filter to see only actively running scans.
-- **Acceptance Criteria:**
-  - Status filter dropdown includes Running and Active options
-  - Filtering works correctly for both statuses
-
-### [REQ-006] Bulk edit scans by status group
-- **Type:** Feature
-- **Priority:** High
-- **Description:** Allow bulk editing an entire status group of scans at once. For example, select all "Running" scans and apply the same action (pause, cancel, etc.) to all of them in one operation, without having to select each checkbox individually.
-- **Acceptance Criteria:**
-  - Clicking a status group header selects all scans in that group
-  - Bulk action bar reflects the group selection
-  - Actions are staged as a batch
-
-### [REQ-007] Change log page with export
-- **Type:** Feature
-- **Priority:** High
-- **Description:** Add a new page/tab to the app that shows a log of all changes that have been applied (the history of "Make It So" actions). Each entry should show the action, scan name, who/when it was staged, and when it was applied. Include an export option to download the log as CSV.
-- **Acceptance Criteria:**
-  - New "Changelog" or "History" tab in the navbar
-  - Shows all previously applied staged changes with timestamps
-  - Sortable/filterable by date, action type, scan
-  - Export button to download as CSV
-  - Persists across app restarts (stored in database)
+<!-- Items approved for implementation -->
 
 ## In Progress
 
@@ -89,3 +63,26 @@ Changes and feature requests for the Qualys Scan Manager.
   - Added `edit_scan` mode — non-scheduled scans now have an Edit button on the detail page that opens the launch form pre-filled with existing values
   - Fixed `prefillForm()` for scheduled scans to parse and restore schedule fields (frequency, weekdays, day-of-month, start date/time, active status)
   - All scan types now support editing with no blank/default values on existing data
+
+### [REQ-005] Add "Running" and "Active" status filters to non-scheduled scans
+- **Type:** Enhancement
+- **Priority:** Medium
+- **Completed:** 2026-04-12
+- **Summary:** Added Active, Error, and Canceled options to the status filter dropdown on the non-scheduled scans page.
+
+### [REQ-006] Bulk edit scans by status group
+- **Type:** Feature
+- **Priority:** High
+- **Completed:** 2026-04-12
+- **Summary:** Added checkbox to each status group header. Checking it selects all scans in that group. Bulk action bar updates accordingly.
+
+### [REQ-007] Change log page with export
+- **Type:** Feature
+- **Priority:** High
+- **Completed:** 2026-04-12
+- **Summary:**
+  - New "History" tab in navbar showing all applied changes with timestamps
+  - Filterable by search text and action type
+  - CSV export via "Export CSV" button
+  - Added `applied_at` column to `staged_changes` via migration
+  - Persists across restarts (uses existing `staged_changes` table with `applied = 1`)

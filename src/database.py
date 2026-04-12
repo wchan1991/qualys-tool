@@ -252,6 +252,14 @@ class ScanDatabase:
             """)
             logger.info("Migration complete: payload column added")
 
+        if 'applied_at' not in columns:
+            logger.info("Migrating database: adding applied_at column to staged_changes")
+            cursor.execute("""
+                ALTER TABLE staged_changes
+                ADD COLUMN applied_at TEXT
+            """)
+            logger.info("Migration complete: applied_at column added")
+
         # F21: tri-state status column on scheduled_scans
         cursor.execute("PRAGMA table_info(scheduled_scans)")
         sched_cols = [row[1] for row in cursor.fetchall()]
@@ -775,12 +783,38 @@ class ScanDatabase:
         """Mark a staged change as applied."""
         cursor = self.conn.cursor()
         cursor.execute(
-            "UPDATE staged_changes SET applied = 1 WHERE id = ?",
-            (change_id,)
+            "UPDATE staged_changes SET applied = 1, applied_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), change_id)
         )
         self.conn.commit()
         logger.info(f"Marked change {change_id} as applied")
     
+    def get_changelog(self) -> List[Dict[str, Any]]:
+        """Get all applied changes for the changelog."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, scan_ref, COALESCE(scan_type, 'scan') as scan_type,
+                   change_type, old_value, new_value,
+                   staged_at, description, applied_at
+            FROM staged_changes
+            WHERE applied = 1
+            ORDER BY applied_at DESC, staged_at DESC
+        """)
+        return [
+            {
+                "id": row[0],
+                "scan_ref": row[1],
+                "scan_type": row[2],
+                "action": row[3],
+                "old_value": row[4],
+                "new_value": row[5],
+                "staged_at": row[6],
+                "description": row[7],
+                "applied_at": row[8] or row[6],
+            }
+            for row in cursor.fetchall()
+        ]
+
     def clear_staged_change(self, change_id: int) -> None:
         """Remove a staged change (discard)."""
         cursor = self.conn.cursor()

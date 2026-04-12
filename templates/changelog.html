@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block title %}Change History - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📜 Change History</h1>
+    <p class="page-description">Log of all applied changes</p>
+    <div class="header-actions">
+        <input type="text" id="search-input" class="input" placeholder="Search history..." oninput="filterLog()">
+        <select id="action-filter" class="input" onchange="filterLog()">
+            <option value="">All Actions</option>
+            <option value="pause">Pause</option>
+            <option value="resume">Resume</option>
+            <option value="cancel">Cancel</option>
+            <option value="activate">Activate</option>
+            <option value="deactivate">Deactivate</option>
+            <option value="delete">Delete</option>
+            <option value="create">Create</option>
+            <option value="modify">Modify</option>
+            <option value="launch">Launch</option>
+        </select>
+        <a href="/api/changelog/csv" class="btn btn-secondary" id="export-btn">📥 Export CSV</a>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-scroll-wrap">
+            <table class="data-table" id="changelog-table">
+                <thead>
+                    <tr>
+                        <th>Applied</th>
+                        <th>Action</th>
+                        <th>Type</th>
+                        <th>Scan</th>
+                        <th>Description</th>
+                        <th>Staged</th>
+                    </tr>
+                </thead>
+                <tbody id="changelog-tbody">
+                    <tr>
+                        <td colspan="6" class="text-muted text-center">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allEntries = [];
+
+document.addEventListener('DOMContentLoaded', loadChangelog);
+
+async function loadChangelog() {
+    try {
+        const res = await fetch('/api/changelog');
+        const json = await res.json();
+        const tbody = document.getElementById('changelog-tbody');
+
+        if (!json.success || !json.data.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">No changes have been applied yet.</td></tr>';
+            return;
+        }
+
+        allEntries = json.data;
+        renderLog(allEntries);
+    } catch (e) {
+        document.getElementById('changelog-tbody').innerHTML =
+            '<tr><td colspan="6" class="text-danger text-center">Failed to load changelog</td></tr>';
+    }
+}
+
+function renderLog(entries) {
+    const tbody = document.getElementById('changelog-tbody');
+    if (!entries.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">No matching entries</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = entries.map(e => {
+        const actionClass = {
+            pause: 'btn-warning', resume: 'btn-success', cancel: 'btn-danger',
+            activate: 'btn-success', deactivate: 'btn-warning', delete: 'btn-danger',
+            create: 'btn-primary', modify: 'btn-primary', launch: 'btn-primary',
+        }[e.action] || 'btn-secondary';
+
+        return `
+            <tr>
+                <td>${formatDate(e.applied_at)}</td>
+                <td><span class="btn btn-sm ${actionClass}" style="pointer-events:none;font-size:0.75rem">${escapeHtml(e.action)}</span></td>
+                <td><span class="tag">${escapeHtml(e.scan_type)}</span></td>
+                <td>${escapeHtml(e.scan_ref)}</td>
+                <td>${escapeHtml(e.description || '')}</td>
+                <td>${formatDate(e.staged_at)}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function filterLog() {
+    const search = document.getElementById('search-input').value.toLowerCase();
+    const actionFilter = document.getElementById('action-filter').value.toLowerCase();
+
+    const filtered = allEntries.filter(e => {
+        const matchesSearch = !search ||
+            (e.description || '').toLowerCase().includes(search) ||
+            (e.scan_ref || '').toLowerCase().includes(search) ||
+            (e.action || '').toLowerCase().includes(search);
+        const matchesAction = !actionFilter || e.action === actionFilter;
+        return matchesSearch && matchesAction;
+    });
+
+    renderLog(filtered);
+}
+</script>
+{% endblock %}

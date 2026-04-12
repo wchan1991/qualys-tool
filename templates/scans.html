@@ -11,9 +11,12 @@
         <select id="status-filter" class="input" onchange="filterScans()">
             <option value="">All Statuses</option>
             <option value="running">Running</option>
+            <option value="active">Active</option>
             <option value="paused">Paused</option>
             <option value="queued">Queued</option>
             <option value="finished">Finished</option>
+            <option value="error">Error</option>
+            <option value="canceled">Canceled</option>
         </select>
         <select id="group-by" class="input" onchange="onGroupByChange()">
             <option value="status">Group by Status</option>
@@ -209,11 +212,14 @@ function renderScans(scans) {
         const collapsed = collapsedGroupsScans.has(key);
         const caret = collapsed ? '▸' : '▾';
         html.push(`
-            <tr class="group-header" data-group="${key}" onclick="toggleScansGroup('${key}')">
-                <td colspan="8">
-                    <span class="group-caret">${caret}</span>
-                    ${escapeHtml(SCANS_GROUP_LABELS[key] || key)}
-                    <span class="group-count">(${bucket.length})</span>
+            <tr class="group-header" data-group="${key}">
+                <td colspan="8" style="display:flex;align-items:center;gap:0.5rem">
+                    <input type="checkbox" class="group-cb" data-group="${key}" onclick="toggleGroupSelect(event, '${key}')" title="Select all ${key}">
+                    <span style="cursor:pointer;flex:1" onclick="toggleScansGroup('${key}')">
+                        <span class="group-caret">${caret}</span>
+                        ${escapeHtml(SCANS_GROUP_LABELS[key] || key)}
+                        <span class="group-count">(${bucket.length})</span>
+                    </span>
                 </td>
             </tr>
         `);
@@ -228,6 +234,13 @@ function renderScans(scans) {
         }
     }
     tbody.innerHTML = html.join('');
+}
+
+function toggleGroupSelect(event, key) {
+    event.stopPropagation();
+    const checked = event.target.checked;
+    document.querySelectorAll(`.group-${key} .row-cb`).forEach(cb => { cb.checked = checked; });
+    onCheckboxChange();
 }
 
 function toggleScansGroup(key) {

@@ -396,6 +396,82 @@ def seed():
         )
     print(f"  Inserted {len(staged)} staged changes")
 
+    # ── Applied changes (changelog history) ──────────────────
+    history = [
+        {
+            "scan_ref": "scan/1718230001.00001",
+            "change_type": ChangeType.PAUSE,
+            "description": "Pause: Nightly Full Scan - US East",
+            "scan_type": "scan",
+            "old_value": "Running",
+            "new_value": "Paused",
+            "hours_ago": 48,
+        },
+        {
+            "scan_ref": "scan/1718230001.00001",
+            "change_type": ChangeType.RESUME,
+            "description": "Resume: Nightly Full Scan - US East",
+            "scan_type": "scan",
+            "old_value": "Paused",
+            "new_value": "Running",
+            "hours_ago": 46,
+        },
+        {
+            "scan_ref": "900010",
+            "change_type": ChangeType.DEACTIVATE,
+            "description": "Deactivate: Weekly Compliance Scan (maintenance window)",
+            "scan_type": "scheduled",
+            "old_value": "active",
+            "new_value": "inactive",
+            "hours_ago": 36,
+        },
+        {
+            "scan_ref": "900010",
+            "change_type": ChangeType.ACTIVATE,
+            "description": "Activate: Weekly Compliance Scan (maintenance complete)",
+            "scan_type": "scheduled",
+            "old_value": "inactive",
+            "new_value": "active",
+            "hours_ago": 24,
+        },
+        {
+            "scan_ref": "scan/1718230002.00002",
+            "change_type": ChangeType.CANCEL,
+            "description": "Cancel: Ad-hoc pen test scan (wrong target)",
+            "scan_type": "scan",
+            "old_value": "Running",
+            "new_value": "Canceled",
+            "hours_ago": 12,
+        },
+        {
+            "scan_ref": "900011",
+            "change_type": ChangeType.DELETE,
+            "description": "Delete: Deprecated quarterly scan",
+            "scan_type": "scheduled",
+            "old_value": "",
+            "new_value": "",
+            "hours_ago": 6,
+        },
+    ]
+
+    for h in history:
+        change_id = db.stage_change(
+            scan_ref=h["scan_ref"],
+            change_type=h["change_type"],
+            description=h["description"],
+            scan_type=h["scan_type"],
+            old_value=h["old_value"],
+            new_value=h["new_value"],
+        )
+        # Mark as applied with a timestamp
+        applied_time = (now - timedelta(hours=h["hours_ago"])).isoformat()
+        db.conn.execute(
+            "UPDATE staged_changes SET applied = 1, applied_at = ? WHERE id = ?",
+            (applied_time, change_id)
+        )
+    db.conn.commit()
+    print(f"  Inserted {len(history)} changelog entries (applied changes)")
+
     db.close()
     print(f"\nDone! Database seeded at: {db_path}")
     print("Run 'python app.py' to launch in offline mode.")
