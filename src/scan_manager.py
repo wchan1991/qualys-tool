@@ -411,10 +411,7 @@ class ScanManager:
 
     def get_scheduled_scan_detail(self, scan_id: str) -> Dict[str, Any]:
         """Get full detail for a scheduled scan."""
-        scans = self.client.get_scheduled_scan(scan_id)
-        if scans:
-            return scans[0]
-        return {}
+        return self.client.get_scheduled_scan(scan_id)
 
     # ========================================================
     # REVERSE TARGET LOOKUP
