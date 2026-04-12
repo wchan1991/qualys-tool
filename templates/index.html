@@ -231,27 +231,26 @@ async function loadTrafficChart(mode = 'past') {
             pointRadius: 3,
         }];
 
-        // For past mode, overlay red dot-pairs for each failed scan (start → end)
+        // For past mode, overlay red dot-pairs for failed scans (start → end)
         if (mode === 'past' && _failedSpans.length) {
+            // Merge all failed spans into one dataset
+            const dotData = labels.map(() => null);
             for (const span of _failedSpans) {
                 const startIdx = labels.indexOf(span.startHour);
                 const endIdx = labels.indexOf(span.endHour);
-                if (startIdx === -1 && endIdx === -1) continue;
-                // Build sparse data: null everywhere except start and end dots
-                const dotData = labels.map((_, i) => {
-                    if (i === startIdx || i === endIdx) return 0.15;  // slight y offset so dots sit above axis
-                    return null;
-                });
+                if (startIdx !== -1) dotData[startIdx] = 0.15;
+                if (endIdx !== -1) dotData[endIdx] = 0.15;
+            }
+            if (dotData.some(v => v !== null)) {
                 datasets.push({
-                    label: span.title,
+                    label: 'Failed',
                     data: dotData,
                     borderColor: '#ef4444',
                     backgroundColor: 'transparent',
                     fill: false,
                     tension: 0,
-                    spanGaps: true,
-                    borderWidth: 2,
-                    borderDash: [4, 3],
+                    spanGaps: false,
+                    borderWidth: 0,
                     pointRadius: dotData.map(v => v !== null ? 6 : 0),
                     pointBackgroundColor: '#ef4444',
                     pointBorderColor: '#fff',
@@ -261,15 +260,13 @@ async function loadTrafficChart(mode = 'past') {
             }
         }
 
-        const hasLegend = datasets.length > 1;
-
         _trafficChart = new Chart(ctx, {
             type: 'line',
             data: { labels, datasets },
             options: {
                 responsive: true,
                 plugins: {
-                    legend: { display: hasLegend, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+                    legend: { display: false },
                 },
                 scales: {
                     y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } },
