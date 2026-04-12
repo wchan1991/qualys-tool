@@ -233,15 +233,14 @@ async function loadTrafficChart(mode = 'past') {
 
         // For past mode, overlay red dot-pairs for failed scans (start → end)
         if (mode === 'past' && _failedSpans.length) {
-            // Merge all failed spans into one dataset
-            const dotData = labels.map(() => null);
             for (const span of _failedSpans) {
                 const startIdx = labels.indexOf(span.startHour);
                 const endIdx = labels.indexOf(span.endHour);
-                if (startIdx !== -1) dotData[startIdx] = 0.15;
-                if (endIdx !== -1) dotData[endIdx] = 0.15;
-            }
-            if (dotData.some(v => v !== null)) {
+                if (startIdx === -1 && endIdx === -1) continue;
+                const dotData = labels.map((_, i) => {
+                    if (i === startIdx || i === endIdx) return 0.15;
+                    return null;
+                });
                 datasets.push({
                     label: 'Failed',
                     data: dotData,
