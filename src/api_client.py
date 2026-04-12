@@ -430,9 +430,9 @@ class QualysClient:
                     if ag.text and ag.text.strip():
                         asset_groups.append(ag.text.strip())
 
-                # Host processing counts (available on finished/error scans)
-                processed = self._xml_text(elem, "PROCESSED")
-                total_hosts = self._xml_text(elem, "TOTAL")
+                # Host processing counts (nested under STATUS in Qualys XML)
+                processed = self._xml_text(elem, "STATUS/PROCESSED") or self._xml_text(elem, ".//PROCESSED")
+                total_hosts = self._xml_text(elem, "STATUS/TOTAL") or self._xml_text(elem, ".//TOTAL")
 
                 scan_data = {
                     "ref": self._xml_text(elem, "REF"),
