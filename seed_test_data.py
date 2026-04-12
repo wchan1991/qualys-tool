@@ -86,6 +86,8 @@ def seed():
             "launched": (now - timedelta(hours=8)).strftime("%Y/%m/%d %H:%M:%S"),
             "duration": "03:22:10",
             "tags": ["Internal", "US-East", "Nightly"],
+            "processed": 1247,
+            "total_hosts": 1310,
         },
         {
             "ref": "scan/1718234006.66345",
@@ -97,6 +99,8 @@ def seed():
             "launched": (now - timedelta(hours=7)).strftime("%Y/%m/%d %H:%M:%S"),
             "duration": "02:58:44",
             "tags": ["Internal", "US-West", "Nightly"],
+            "processed": 983,
+            "total_hosts": 983,
         },
         {
             "ref": "scan/1718234007.77345",
@@ -108,6 +112,8 @@ def seed():
             "launched": (now - timedelta(hours=12)).strftime("%Y/%m/%d %H:%M:%S"),
             "duration": "01:15:00",
             "tags": ["Cloud", "AWS", "Discovery"],
+            "processed": 156,
+            "total_hosts": 160,
         },
         {
             "ref": "scan/1718234008.88345",
@@ -119,6 +125,8 @@ def seed():
             "launched": (now - timedelta(hours=3)).strftime("%Y/%m/%d %H:%M:%S"),
             "duration": "00:12:05",
             "tags": ["WebApp", "Production"],
+            "processed": 0,
+            "total_hosts": 1,
         },
         {
             "ref": "scan/1718234009.99345",
@@ -130,6 +138,8 @@ def seed():
             "launched": (now - timedelta(hours=6)).strftime("%Y/%m/%d %H:%M:%S"),
             "duration": "00:33:20",
             "tags": ["Database", "Audit"],
+            "processed": 1,
+            "total_hosts": 3,
         },
         {
             "ref": "scan/1718234010.10345",
@@ -141,6 +151,8 @@ def seed():
             "launched": (now - timedelta(hours=20)).strftime("%Y/%m/%d %H:%M:%S"),
             "duration": "06:45:00",
             "tags": ["Executive", "Quarterly", "Production"],
+            "processed": 4521,
+            "total_hosts": 4600,
         },
         {
             "ref": "scan/1718234011.11345",
