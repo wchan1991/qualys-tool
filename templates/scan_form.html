@@ -13,7 +13,7 @@
 
 {% block content %}
 <div class="page-header">
-    <h1>
+    <h1 id="page-title">
         {% if mode == 'create_scheduled' %}📅 New Scheduled Scan
         {% elif mode == 'edit_scheduled' %}✏️ Edit Scheduled Scan
         {% elif mode == 'edit_scan' %}✏️ Edit Scan
@@ -199,6 +199,7 @@ async function init() {
             if (json.success) {
                 currentScan = json.data;
                 prefillForm(json.data);
+                updateEditTitle(json.data);
                 initial = { type: 'ip', value: json.data.target || '' };
             }
         } catch (_) {
@@ -209,6 +210,7 @@ async function init() {
                     currentScan = json2.data.find(s => String(s.scan_id || s.id) === String(SCAN_ID));
                     if (currentScan) {
                         prefillForm(currentScan);
+                        updateEditTitle(currentScan);
                         initial = { type: 'ip', value: currentScan.target || '' };
                     }
                 }
@@ -221,6 +223,7 @@ async function init() {
             if (json.success) {
                 currentScan = json.data;
                 prefillForm(json.data);
+                updateEditTitle(json.data);
                 initial = { type: 'ip', value: json.data.target || '' };
             }
         } catch (_) {
@@ -231,6 +234,7 @@ async function init() {
                     currentScan = json2.data.find(s => s.ref === SCAN_REF);
                     if (currentScan) {
                         prefillForm(currentScan);
+                        updateEditTitle(currentScan);
                         initial = { type: 'ip', value: currentScan.target || '' };
                     }
                 }
@@ -240,6 +244,16 @@ async function init() {
 
     // Mount target picker
     targetPicker = new TargetPicker(document.getElementById('target-picker-mount'), sources, initial);
+}
+
+function updateEditTitle(scan) {
+    const title = scan.title || scan.ref || '';
+    if (!title) return;
+    const h1 = document.getElementById('page-title');
+    if (h1) {
+        const prefix = MODE === 'edit_scheduled' ? '✏️ Edit Scheduled Scan' : '✏️ Edit Scan';
+        h1.textContent = `${prefix}: ${title}`;
+    }
 }
 
 function prefillForm(scan) {

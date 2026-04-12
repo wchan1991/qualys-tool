@@ -148,6 +148,7 @@ function scanRowHTML(scan) {
         `<span class="tag">${escapeHtml(t)}</span>`
     ).join('');
 
+    const editUrl = `/scans/${encodeURIComponent(scan.ref)}/edit`;
     let actions = '';
     if (status === 'running') {
         actions = `
@@ -157,6 +158,15 @@ function scanRowHTML(scan) {
     } else if (status === 'paused') {
         actions = `
             <button class="btn btn-sm btn-success" onclick="openStageModal('resume', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Resume</button>
+            <button class="btn btn-sm btn-danger" onclick="openStageModal('cancel', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Cancel</button>
+        `;
+    } else if (status === 'finished') {
+        actions = `<a href="${editUrl}" class="btn btn-sm btn-primary">Edit & Relaunch</a>`;
+    } else if (status === 'error' || status === 'canceled') {
+        actions = `<a href="${editUrl}" class="btn btn-sm btn-success">Relaunch</a>`;
+    } else if (status === 'queued') {
+        actions = `
+            <button class="btn btn-sm btn-danger" onclick="openStageModal('cancel', '${escapeHtml(scan.ref)}', '${escapeHtml(scan.title)}')">Cancel</button>
         `;
     }
 
@@ -213,13 +223,15 @@ function renderScans(scans) {
         const caret = collapsed ? '▸' : '▾';
         html.push(`
             <tr class="group-header" data-group="${key}">
-                <td colspan="8" style="display:flex;align-items:center;gap:0.5rem">
-                    <input type="checkbox" class="group-cb" data-group="${key}" onclick="toggleGroupSelect(event, '${key}')" title="Select all ${key}">
-                    <span style="cursor:pointer;flex:1" onclick="toggleScansGroup('${key}')">
-                        <span class="group-caret">${caret}</span>
-                        ${escapeHtml(SCANS_GROUP_LABELS[key] || key)}
-                        <span class="group-count">(${bucket.length})</span>
-                    </span>
+                <td colspan="8">
+                    <div style="display:flex;align-items:center;gap:0.5rem">
+                        <input type="checkbox" class="group-cb" data-group="${key}" onclick="toggleGroupSelect(event, '${key}')" title="Select all ${key}">
+                        <span style="cursor:pointer;flex:1" onclick="toggleScansGroup('${key}')">
+                            <span class="group-caret">${caret}</span>
+                            ${escapeHtml(SCANS_GROUP_LABELS[key] || key)}
+                            <span class="group-count">(${bucket.length})</span>
+                        </span>
+                    </div>
                 </td>
             </tr>
         `);

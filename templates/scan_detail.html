@@ -64,6 +64,7 @@ async function loadDetail() {
 
 function renderDetail(scan) {
     const status = (scan.status || '').toLowerCase();
+    const editUrl = `/scans/${encodeURIComponent(scan.ref || SCAN_REF)}/edit`;
     let actions = '';
     if (status === 'running') {
         actions = `
@@ -71,7 +72,16 @@ function renderDetail(scan) {
             <button class="btn btn-danger" onclick="openStageModal('cancel')">⏹ Stage Cancel</button>
         `;
     } else if (status === 'paused') {
-        actions = `<button class="btn btn-success" onclick="openStageModal('resume')">▶ Stage Resume</button>`;
+        actions = `
+            <button class="btn btn-success" onclick="openStageModal('resume')">▶ Stage Resume</button>
+            <button class="btn btn-danger" onclick="openStageModal('cancel')">⏹ Stage Cancel</button>
+        `;
+    } else if (status === 'finished') {
+        actions = `<a href="${editUrl}" class="btn btn-primary">✏️ Edit & Relaunch</a>`;
+    } else if (status === 'error' || status === 'canceled') {
+        actions = `<a href="${editUrl}" class="btn btn-success">🔄 Relaunch</a>`;
+    } else if (status === 'queued') {
+        actions = `<button class="btn btn-danger" onclick="openStageModal('cancel')">⏹ Stage Cancel</button>`;
     }
 
     const tags = (scan.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join(' ');
