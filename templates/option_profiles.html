@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Option Profiles - Qualys Scan Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>⚙️ Option Profiles</h1>
+    <div class="header-actions">
+        <button class="btn btn-primary" onclick="loadProfiles()">🔄 Refresh from Qualys</button>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom:12px">
+    <div class="card-body">
+        <p style="margin:0 0 8px 0">
+            Live list of VM option profiles in your Qualys subscription.
+            The <strong>ID</strong> column is what gets sent to Qualys when you
+            use the bulk <em>Change Profile</em> action — titles can be
+            ambiguous (e.g. <code>Foo</code> vs <code>Foo (beta)</code>),
+            so the app now resolves to an ID before applying.
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="text" id="profile-search" class="search-input"
+                   placeholder="Filter by title or ID…" oninput="filterProfiles()"
+                   style="flex:1;min-width:220px">
+            <label style="display:flex;align-items:center;gap:4px;font-size:13px">
+                <input type="checkbox" id="beta-only" onchange="filterProfiles()">
+                Beta only
+            </label>
+        </div>
+    </div>
+</div>
+
+<!-- Verify / Test-resolution card ————————————————————————— -->
+<div class="card" style="margin-bottom:12px">
+    <div class="card-body">
+        <h3 style="margin-top:0">🧪 Test profile resolution</h3>
+        <p style="margin:4px 0 8px 0;font-size:13px" class="text-muted">
+            Enter a profile title (or ID) to see exactly which profile would
+            be applied to a scheduled scan. Use this before bulk-changing to
+            confirm the beta profile isn't colliding with a similarly-named
+            non-beta one.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input type="text" id="verify-input" class="input"
+                   placeholder='e.g. "Authentication Profile (beta)"'
+                   style="flex:1;min-width:260px"
+                   onkeydown="if(event.key==='Enter')verifyProfile()">
+            <button class="btn btn-primary" onclick="verifyProfile()">Verify</button>
+        </div>
+        <div id="verify-result" style="margin-top:10px"></div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-scroll-wrap">
+            <table class="table data-table">
+                <thead>
+                    <tr>
+                        <th style="width:90px">ID</th>
+                        <th>Title</th>
+                        <th style="width:100px">Default</th>
+                        <th style="width:100px">Beta</th>
+                        <th style="width:120px">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="profiles-tbody">
+                    <tr><td colspan="5" class="text-muted text-center">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="profiles-count" class="text-muted" style="margin-top:8px;font-size:13px"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _allProfiles = [];
+
+document.addEventListener('DOMContentLoaded', loadProfiles);
+
+async function loadProfiles() {
+    const tbody = document.getElementById('profiles-tbody');
+    tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center">Loading…</td></tr>';
+    try {
+        const res = await fetch('/api/option-profiles');
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || 'Load failed');
+        _allProfiles = json.data || [];
+        renderProfiles(_allProfiles);
+    } catch (e) {
+        tbody.innerHTML =
+            `<tr><td colspan="5" class="text-danger text-center">Failed to load: ${esc(e.message)}</td></tr>`;
+    }
+}
+
+function isBeta(p) {
+    return /\(\s*beta\s*\)/i.test(p.title || '');
+}
+function isDefault(p) {
+    const d = String(p.default || '').trim().toLowerCase();
+    return d === '1' || d === 'true';
+}
+
+function filterProfiles() {
+    const q = (document.getElementById('profile-search').value || '').toLowerCase();
+    const betaOnly = document.getElementById('beta-only').checked;
+    const filtered = _allProfiles.filter(p => {
+        if (betaOnly && !isBeta(p)) return false;
+        if (!q) return true;
+        return (p.title || '').toLowerCase().includes(q) ||
+               String(p.id || '').toLowerCase().includes(q);
+    });
+    renderProfiles(filtered);
+}
+
+function renderProfiles(profiles) {
+    const tbody = document.getElementById('profiles-tbody');
+    const countEl = document.getElementById('profiles-count');
+    if (!profiles.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center">No profiles match.</td></tr>';
+        countEl.textContent = `0 of ${_allProfiles.length} profiles`;
+        return;
+    }
+    tbody.innerHTML = profiles.map(p => {
+        const beta = isBeta(p);
+        const def = isDefault(p);
+        return `
+            <tr>
+                <td><code>${esc(p.id || '—')}</code></td>
+                <td>
+                    <strong>${esc(p.title || '—')}</strong>
+                    ${beta ? '<span class="status-badge" style="background:#fef3c7;color:#92400e;margin-left:6px">beta</span>' : ''}
+                </td>
+                <td>${def ? '<span class="status-badge status-active">✓ Default</span>' : '<span class="text-muted">—</span>'}</td>
+                <td>${beta ? '<span class="status-badge" style="background:#fef3c7;color:#92400e">beta</span>' : '<span class="text-muted">—</span>'}</td>
+                <td>
+                    <button class="btn btn-small btn-secondary"
+                            onclick="verifyById(${JSON.stringify(String(p.id || '')).replace(/"/g,'&quot;')})">
+                        🧪 Test
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    countEl.textContent = `Showing ${profiles.length} of ${_allProfiles.length} profiles`;
+}
+
+async function verifyProfile() {
+    const needle = (document.getElementById('verify-input').value || '').trim();
+    const out = document.getElementById('verify-result');
+    if (!needle) {
+        out.innerHTML = '<span class="text-danger">Type a title or ID first.</span>';
+        return;
+    }
+    out.innerHTML = '<span class="text-muted">Resolving…</span>';
+    try {
+        const res = await fetch('/api/option-profiles/resolve?q=' + encodeURIComponent(needle));
+        const json = await res.json();
+        if (!json.success) {
+            out.innerHTML = `<div class="alert alert-danger" style="padding:8px 12px;border-radius:4px;background:#fee2e2;color:#991b1b">
+                ❌ <strong>${esc(json.error || 'Resolution failed')}</strong>
+            </div>`;
+            return;
+        }
+        const m = json.data.matched;
+        const betaBadge = /\(\s*beta\s*\)/i.test(m.title || '')
+            ? '<span class="status-badge" style="background:#fef3c7;color:#92400e;margin-left:6px">beta</span>'
+            : '';
+        out.innerHTML = `
+            <div class="alert" style="padding:10px 12px;border-radius:4px;background:#d1fae5;color:#065f46">
+                ✅ <strong>Match found — this is what Qualys would apply:</strong>
+                <div style="margin-top:6px;font-family:monospace;font-size:13px">
+                    <div>Input:  <code>${esc(json.data.input)}</code></div>
+                    <div>→ ID:    <code>${esc(m.id)}</code></div>
+                    <div>→ Title: <strong>${esc(m.title)}</strong>${betaBadge}</div>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        out.innerHTML = `<span class="text-danger">Network error: ${esc(e.message)}</span>`;
+    }
+}
+
+function verifyById(id) {
+    document.getElementById('verify-input').value = id;
+    verifyProfile();
+}
+
+function esc(text) {
+    if (text == null) return '';
+    const d = document.createElement('div');
+    d.textContent = String(text);
+    return d.innerHTML;
+}
+</script>
+{% endblock %}

@@ -55,7 +55,27 @@
         <div class="modal-body">
             <p>Apply to <span id="profile-target-count">0</span> selected scheduled scan(s).</p>
             <label for="profile-select">New Option Profile:</label>
-            <select id="profile-select" class="input"></select>
+            <select id="profile-select" class="input" onchange="onProfileSelectChange()"></select>
+
+            <!-- Shows the *exact* profile (ID + title) that will be sent to
+                 Qualys, so the user can verify they picked the beta one and
+                 not a similarly-named non-beta one. -->
+            <div id="profile-preview" style="margin-top:8px;padding:8px 10px;border-radius:4px;background:#f3f4f6;font-size:13px;font-family:monospace;display:none">
+                <div><strong>Will apply:</strong></div>
+                <div>ID:    <code id="profile-preview-id">—</code></div>
+                <div>Title: <span id="profile-preview-title">—</span></div>
+            </div>
+
+            <div style="margin-top:6px">
+                <button type="button" class="btn btn-small btn-secondary" onclick="verifySelectedProfile()">
+                    🧪 Verify against Qualys
+                </button>
+                <a href="/option-profiles" target="_blank" style="font-size:12px;margin-left:6px">
+                    (see full list ↗)
+                </a>
+            </div>
+            <div id="profile-verify-result" style="margin-top:6px;font-size:13px"></div>
+
             <label for="profile-reason" style="margin-top:8px">Reason (optional):</label>
             <textarea id="profile-reason" rows="2" placeholder="Why are you making this change?"></textarea>
         </div>
@@ -402,6 +422,11 @@
     }
 
     // ── F18: Change Option Profile modal ──────────────────────
+    // The dropdown now keys options by profile ID (unambiguous) — earlier
+    // versions keyed by title, which caused Qualys to silently pick a
+    // similarly-named non-beta profile when the user chose a beta one.
+    let _profileCatalog = [];  // [{id, title, default}]
+
     async function openProfileModal() {
         const checked = document.querySelectorAll('.row-cb:checked');
         if (!checked.length) {
@@ -412,24 +437,72 @@
         const sel = document.getElementById('profile-select');
         sel.innerHTML = '<option value="">Loading…</option>';
         document.getElementById('profile-reason').value = '';
+        document.getElementById('profile-preview').style.display = 'none';
+        document.getElementById('profile-verify-result').innerHTML = '';
         document.getElementById('profile-modal').classList.remove('hidden');
 
         try {
-            const res = await fetch('/api/target-sources');
+            // Use the dedicated endpoint — bypasses the target-sources cache
+            // so a newly-created beta profile shows up immediately.
+            const res = await fetch('/api/option-profiles');
             const json = await res.json();
-            const profiles = (json.success && json.data && json.data.option_profiles) || [];
+            const profiles = (json.success && json.data) || [];
+            _profileCatalog = profiles;
             if (!profiles.length) {
                 sel.innerHTML = '<option value="">No profiles available</option>';
                 return;
             }
-            sel.innerHTML = profiles
-                .map(p => {
-                    const label = p.title || p.id || '(unnamed)';
-                    return `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`;
-                })
-                .join('');
+            sel.innerHTML =
+                '<option value="">— Select a profile —</option>' +
+                profiles.map(p => {
+                    const label = (p.title || p.id || '(unnamed)');
+                    // Keep the ID visible in the dropdown so the user
+                    // can distinguish two similarly-named profiles.
+                    const suffix = p.id ? ` — id=${escapeHtml(String(p.id))}` : '';
+                    return `<option value="${escapeHtml(String(p.id))}"
+                                    data-title="${escapeHtml(label)}">${escapeHtml(label)}${suffix}</option>`;
+                }).join('');
         } catch (e) {
             sel.innerHTML = '<option value="">Failed to load profiles</option>';
+        }
+    }
+
+    function onProfileSelectChange() {
+        const sel = document.getElementById('profile-select');
+        const preview = document.getElementById('profile-preview');
+        document.getElementById('profile-verify-result').innerHTML = '';
+        if (!sel.value) {
+            preview.style.display = 'none';
+            return;
+        }
+        const opt = sel.options[sel.selectedIndex];
+        document.getElementById('profile-preview-id').textContent = sel.value;
+        document.getElementById('profile-preview-title').textContent =
+            opt.getAttribute('data-title') || '';
+        preview.style.display = 'block';
+    }
+
+    async function verifySelectedProfile() {
+        const sel = document.getElementById('profile-select');
+        const out = document.getElementById('profile-verify-result');
+        if (!sel.value) {
+            out.innerHTML = '<span style="color:#b91c1c">Pick a profile first.</span>';
+            return;
+        }
+        out.innerHTML = '<span class="text-muted">Checking…</span>';
+        try {
+            const res = await fetch('/api/option-profiles/resolve?q=' + encodeURIComponent(sel.value));
+            const json = await res.json();
+            if (!json.success) {
+                out.innerHTML = `<span style="color:#b91c1c">❌ ${escapeHtml(json.error || 'Resolution failed')}</span>`;
+                return;
+            }
+            const m = json.data.matched;
+            out.innerHTML =
+                `<span style="color:#065f46">✅ Qualys confirms: <strong>${escapeHtml(m.title)}</strong> ` +
+                `(id=<code>${escapeHtml(m.id)}</code>)</span>`;
+        } catch (e) {
+            out.innerHTML = '<span style="color:#b91c1c">Network error.</span>';
         }
     }
 
@@ -439,16 +512,22 @@
 
     async function confirmProfileChange() {
         const checked = Array.from(document.querySelectorAll('.row-cb:checked'));
-        const profile = document.getElementById('profile-select').value;
+        const sel = document.getElementById('profile-select');
+        const profileId = sel.value;
+        const opt = sel.options[sel.selectedIndex];
+        const profileTitle = opt ? (opt.getAttribute('data-title') || '') : '';
         const reason = document.getElementById('profile-reason').value;
-        if (!checked.length || !profile) {
-            closeProfileModal();
+        if (!checked.length || !profileId) {
+            showToast('Select a profile first', 'error');
             return;
         }
         const changes = checked.map(cb => ({
             action: 'modify_option_profile',
             scan_ref: cb.dataset.id,
-            option_profile: profile,
+            // Send BOTH — the backend prefers the ID (unambiguous) and uses
+            // the title purely for the staged change description.
+            option_id: profileId,
+            option_profile: profileTitle,
             title: cb.dataset.title || '',
             reason,
         }));
@@ -460,12 +539,14 @@
             });
             const json = await res.json();
             if (json.success) {
-                showToast(`Staged ${json.data.staged} profile changes`, 'success');
+                const msg = `Staged ${json.data.staged} profile changes → ${profileTitle} (id=${profileId})`;
+                showToast(msg, 'success');
                 closeProfileModal();
                 clearSelection();
                 updateStagingBadge();
                 if (json.data.failed && json.data.failed.length) {
                     console.warn('Some profile changes failed:', json.data.failed);
+                    showToast(`${json.data.failed.length} change(s) failed — see console`, 'error');
                 }
             } else {
                 showToast(json.error || 'Bulk profile change failed', 'error');

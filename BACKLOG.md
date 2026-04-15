@@ -24,7 +24,7 @@ Changes and feature requests for the Qualys Scan Manager.
 ## Proposed
 
 <!-- Add new requests here -->
-### [REQ-013] Expansion 
+### [REQ-013] Expansion - Import Function
 - **Type:** Feature
 - **Priority:** High
 - **Description:** Add in an import scan as a sub menu for the Scheduled Scans. I want to be able to import existing excel sheets of planned scans, have the platforma assess the changes, have the ability to make changes in the tool and  publish.
@@ -47,6 +47,41 @@ Changes and feature requests for the Qualys Scan Manager.
 <!-- REQ-008 and REQ-009 moved to Done -->
 
 ## Done
+
+### [REQ-019] Option Profiles tab + fix bulk change picking wrong profile
+- **Type:** Bug + Feature
+- **Priority:** High
+- **Completed:** 2026-04-15
+- **Description:** Bulk "Change Profile" action silently applied the wrong
+  profile when two profiles shared a name prefix (e.g. `Foo` vs `Foo (beta)`).
+  Root cause: the staging payload used `option_profile` (title only), but
+  `_build_scan_form()` only read `option_id` / `option_title` — so no profile
+  parameter was sent to Qualys, leaving the original profile in place.
+- **Changes:**
+  - `src/api_client.py`: `_build_scan_form()` now falls back to `option_profile`
+    as a title alias; added `resolve_option_profile()` helper that exact-matches
+    by ID or title and raises `QualysError` with similar-profile hints when
+    ambiguous/missing.
+  - `app.py`: `/api/stage/bulk` now resolves the profile to an ID server-side
+    before staging, so the applied payload always carries `option_id`.
+  - New `/option-profiles` page (nav: ⚙️ Profiles) listing all VM profiles live
+    from Qualys with ID, title, default/beta badges, search, and a per-row
+    "🧪 Test" button.
+  - New API endpoints: `/api/option-profiles` (uncached), `/api/option-profiles/resolve?q=…`.
+  - `templates/scheduled.html`: bulk modal dropdown now keys by profile ID,
+    shows `title — id=N` in each option, previews the resolved ID+title,
+    and has a "🧪 Verify against Qualys" button that hits the resolve endpoint.
+  - `templates/staging.html`: change rows now show the resolved profile ID
+    next to the title, and warn with ⚠ if only a title is staged (legacy rows).
+- **Test process:**
+  1. Open ⚙️ Profiles — confirm both beta and non-beta profiles are listed
+     with distinct IDs.
+  2. On Scheduled, select a scan and open Change Profile — each option shows
+     `Title — id=N`, and picking one reveals the preview box.
+  3. Click "🧪 Verify against Qualys" — should confirm the exact title/ID.
+  4. Stage the change — staging page shows the resolved ID, not just the title.
+  5. Apply — Qualys receives `option_id=N`, which can't collide with a
+     similarly-named profile.
 
 ### [REQ-001] Improve non-scheduled scans table formatting
 - **Type:** Enhancement

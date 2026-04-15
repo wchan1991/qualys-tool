@@ -128,7 +128,20 @@ function renderStaged(changes) {
                 const parts = [];
                 if (ch.title) parts.push(`Title → <em>${escapeHtml(ch.title)}</em>`);
                 if (ch.target) parts.push(`Target → <em>${escapeHtml(typeof ch.target === 'object' ? ch.target.value : ch.target)}</em>`);
-                if (ch.option_profile) parts.push(`Profile → <em>${escapeHtml(ch.option_profile)}</em>`);
+                // Show resolved ID when present — this is the *exact*
+                // profile Qualys will apply (title is informational only).
+                if (ch.option_id) {
+                    const t = ch.option_title || ch.option_profile || '';
+                    parts.push(
+                        `Profile → <em>${escapeHtml(t)}</em> ` +
+                        `<code style="font-size:0.75rem;color:#6b7280">id=${escapeHtml(String(ch.option_id))}</code>`
+                    );
+                } else if (ch.option_profile) {
+                    parts.push(
+                        `Profile → <em>${escapeHtml(ch.option_profile)}</em> ` +
+                        `<span style="color:#b91c1c;font-size:0.75rem">⚠ no ID — title-only match</span>`
+                    );
+                }
                 extraDetail = parts.length ? `<div style="font-size:0.8rem;color:var(--text-muted,#666);margin-top:0.2rem">${parts.join(' · ')}</div>` : '';
                 refCell = `<div class="scan-ref">${escapeHtml(change.scan_ref)}</div>`;
             } else {

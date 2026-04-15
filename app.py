@@ -317,6 +317,16 @@ def scanners_page():
     return render_template("scanners.html")
 
 
+@app.route("/option-profiles")
+def option_profiles_page():
+    """
+    Option Profiles page — lists all VM option profiles fetched live from
+    Qualys. Added to make it obvious which profile maps to which ID so that
+    bulk "Change Profile" operations can be verified ahead of time.
+    """
+    return render_template("option_profiles.html")
+
+
 @app.route("/changelog")
 def changelog_page():
     """Change history page."""
@@ -697,17 +707,32 @@ def api_stage_bulk():
             elif action == "delete":
                 manager.stage_delete_scheduled(scan_ref, title, reason)
             elif action == "modify_option_profile":
-                new_profile = (item.get("option_profile") or "").strip()
-                if not new_profile:
-                    raise ValueError("option_profile required")
+                # Accept option_id (preferred — unambiguous) OR option_profile
+                # (title; must exact-match). Always resolve to an ID before
+                # staging so the Qualys call can't silently match a similar
+                # profile (e.g. "Foo (beta)" vs "Foo").
+                new_id = (item.get("option_id") or "").strip()
+                new_title = (item.get("option_profile") or "").strip()
+                if not new_id and not new_title:
+                    raise ValueError("option_id or option_profile required")
                 current = _sched_by_id(scan_ref)
                 if not current:
                     raise ValueError(f"Scheduled scan {scan_ref} not found")
+                resolved = manager.client.resolve_option_profile(new_id or new_title)
+                changes = {
+                    "option_id": resolved["id"],
+                    "option_title": resolved["title"],
+                    # Keep human-readable alias so the staging UI can show it
+                    "option_profile": resolved["title"],
+                }
                 manager.stage_modify_scheduled(
                     scan_id=scan_ref,
                     current=current,
-                    changes={"option_profile": new_profile},
-                    reason=reason or f"Change option profile to {new_profile}",
+                    changes=changes,
+                    reason=reason or (
+                        f"Change option profile to {resolved['title']} "
+                        f"(id={resolved['id']})"
+                    ),
                 )
             else:
                 raise ValueError(f"Unknown action: {action}")
@@ -785,6 +810,49 @@ def api_target_sources():
     """Get asset groups, tags, scanners, and option profiles for form dropdowns."""
     manager = get_manager()
     return manager.get_target_sources()
+
+
+@app.route("/api/option-profiles")
+@api_response
+def api_option_profiles():
+    """
+    Fresh list of VM option profiles from Qualys — used by the dedicated
+    Option Profiles page so the cached target-sources payload can't mask
+    newly-created profiles.
+    """
+    manager = get_manager()
+    profiles = manager.client.list_option_profiles()
+    # Sort by title for stable display, with default profile first.
+    def _sort_key(p):
+        is_default = (p.get("default") or "").strip() in ("1", "true", "True")
+        return (0 if is_default else 1, (p.get("title") or "").lower())
+    return sorted(profiles, key=_sort_key)
+
+
+@app.route("/api/option-profiles/resolve")
+@api_response
+def api_resolve_option_profile():
+    """
+    Test/preview endpoint: given a profile title or ID, return exactly
+    which profile (id + title) Qualys would apply. Used by the bulk-change
+    modal's "Verify" button and by the Option Profiles page.
+
+    Query params:
+        q: the title or ID the user typed/selected
+    """
+    needle = (request.args.get("q") or "").strip()
+    if not needle:
+        raise ValueError("q query parameter is required")
+    manager = get_manager()
+    resolved = manager.client.resolve_option_profile(needle)
+    return {
+        "input": needle,
+        "matched": {
+            "id": resolved.get("id"),
+            "title": resolved.get("title"),
+            "default": resolved.get("default"),
+        },
+    }
 
 
 # ============================================================

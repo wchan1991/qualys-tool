@@ -359,6 +359,43 @@ class QualysClient:
             params={"action": "list"}
         )
         return self._parse_profiles(response.text)
+
+    def resolve_option_profile(self, title_or_id: str) -> Dict[str, Any]:
+        """
+        Given a profile title or ID, return the exact profile record
+        ({id, title, default}) or raise QualysError if ambiguous / missing.
+
+        This prevents the "beta profile vs similarly-named non-beta profile"
+        bug where Qualys would silently match the wrong profile on a title-
+        only PUT. We require an EXACT case-sensitive title match.
+        """
+        needle = (title_or_id or "").strip()
+        if not needle:
+            raise QualysError("Empty profile identifier")
+        profiles = self.list_option_profiles()
+        # 1) exact ID match
+        by_id = [p for p in profiles if str(p.get("id")) == needle]
+        if by_id:
+            return by_id[0]
+        # 2) exact title match (case-sensitive — avoids "(beta)" vs "(Beta)")
+        by_title = [p for p in profiles if p.get("title") == needle]
+        if len(by_title) == 1:
+            return by_title[0]
+        if len(by_title) > 1:
+            ids = ", ".join(str(p.get("id")) for p in by_title)
+            raise QualysError(
+                f"Profile title {needle!r} is ambiguous — {len(by_title)} "
+                f"profiles share this exact title (IDs: {ids}). "
+                f"Select by ID instead."
+            )
+        # 3) nothing — help the caller see what IS available
+        similar = [p for p in profiles if needle.lower() in (p.get("title") or "").lower()]
+        if similar:
+            hints = "; ".join(f"{p.get('title')!r} (id={p.get('id')})" for p in similar[:5])
+            raise QualysError(
+                f"Profile {needle!r} not found. Similar: {hints}"
+            )
+        raise QualysError(f"Profile {needle!r} not found in Qualys")
     
     def list_scheduled_scans(self) -> List[Dict[str, Any]]:
         """
@@ -895,10 +932,21 @@ class QualysClient:
         if payload.get("scan_title"):
             form["scan_title"] = str(payload["scan_title"])
 
+        # Profile resolution — prefer ID (unambiguous) over title (ambiguous
+        # when profiles share prefixes, e.g. "My Profile" vs "My Profile (beta)").
+        # Accept "option_profile" as a title alias for backwards compatibility
+        # with earlier staging payloads, but log a warning because it's lossy.
         if payload.get("option_id"):
             form["option_id"] = str(payload["option_id"])
         elif payload.get("option_title"):
             form["option_title"] = str(payload["option_title"])
+        elif payload.get("option_profile"):
+            logger.warning(
+                "Profile resolution by title only (no option_id given) — "
+                "Qualys may match a similarly-named profile. payload title=%r",
+                payload.get("option_profile"),
+            )
+            form["option_title"] = str(payload["option_profile"])
 
         if payload.get("iscanner_id"):
             form["iscanner_id"] = str(payload["iscanner_id"])
