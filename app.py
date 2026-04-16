@@ -831,6 +831,35 @@ def api_option_profiles():
     return sorted(profiles, key=_sort_key)
 
 
+@app.route("/api/option-profiles/delete", methods=["POST"])
+@api_response
+def api_delete_option_profiles():
+    """
+    Delete one or more option profiles by ID.
+
+    Body: { "ids": ["123", "456"] }
+    Returns summary of successes and failures.
+    """
+    data = request.json or {}
+    ids = data.get("ids", [])
+    if not ids:
+        raise ValueError("ids list is required")
+    manager = get_manager()
+    results = {"deleted": 0, "failed": []}
+    for pid in ids:
+        try:
+            ok = manager.client.delete_option_profile(str(pid))
+            if ok:
+                results["deleted"] += 1
+            else:
+                results["failed"].append({"id": pid, "error": "Delete returned false"})
+        except Exception as e:
+            results["failed"].append({"id": pid, "error": str(e)})
+    # Bust the target-sources cache so the profile list refreshes
+    ScanManager._target_sources_cache = None
+    return results
+
+
 @app.route("/api/option-profiles/resolve")
 @api_response
 def api_resolve_option_profile():

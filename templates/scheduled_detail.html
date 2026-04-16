@@ -132,27 +132,12 @@ function closeModal() {
     document.getElementById('action-modal').classList.add('hidden');
 }
 
-async function confirmAction() {
+function confirmAction() {
     const action = document.getElementById('modal-action').value;
     const reason = document.getElementById('reason-input').value;
     const title = currentScan ? (currentScan.title || '') : '';
-    try {
-        const res = await fetch('/api/stage', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action, scan_ref: SCAN_ID, title, reason })
-        });
-        const json = await res.json();
-        if (json.success) {
-            showToast(`Staged: ${action}`, 'success');
-            closeModal();
-            updateStagingBadge();
-        } else {
-            showToast(json.error || 'Failed to stage', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
+    closeModal();
+    stageInBackground('/api/stage', { action, scan_ref: SCAN_ID, title, reason }, `${action}`);
 }
 
 function formatDate(d) {

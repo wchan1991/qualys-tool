@@ -216,11 +216,20 @@ class QualysClient:
         if self._rate_limiter:
             self._rate_limiter.acquire()
 
-        self._authenticate()
+        # QPS/REST endpoints (/qps/...) use HTTP Basic Auth, NOT the
+        # classic session cookie from /api/2.0/fo/session/.  Detect by
+        # path prefix and inject auth= accordingly.
+        is_qps = endpoint.startswith("/qps/")
+
+        if not is_qps:
+            self._authenticate()
 
         session = self._get_session()
         url = f"{self.config.api_url}{endpoint}"
         request_timeout = timeout or self.config.timeout
+        basic_auth = (
+            (self.config.username, self.config.password) if is_qps else None
+        )
 
         try:
             response = session.request(
@@ -231,9 +240,12 @@ class QualysClient:
                 json=json_body,
                 headers=headers,
                 timeout=request_timeout,
+                auth=basic_auth,
             )
 
             if response.status_code == 401:
+                if is_qps:
+                    raise AuthError("QPS authentication failed — check credentials")
                 self._authenticated = False
                 self._authenticate()
                 response = session.request(
@@ -396,7 +408,20 @@ class QualysClient:
                 f"Profile {needle!r} not found. Similar: {hints}"
             )
         raise QualysError(f"Profile {needle!r} not found in Qualys")
-    
+
+    def delete_option_profile(self, profile_id: str) -> bool:
+        """
+        Delete a VM option profile by ID.
+
+        API: POST /api/4.0/fo/subscription/option_profile/vm/?action=delete
+        Returns True on success.
+        """
+        response = self._request(
+            "POST", "/api/4.0/fo/subscription/option_profile/vm/",
+            data={"action": "delete", "id": str(profile_id)},
+        )
+        return "success" in response.text.lower() or "deleted" in response.text.lower()
+
     def list_scheduled_scans(self) -> List[Dict[str, Any]]:
         """
         List scheduled scans (VM scan schedules).

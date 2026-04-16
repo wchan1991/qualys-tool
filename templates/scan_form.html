@@ -403,23 +403,9 @@ async function submitForm() {
         body = { action: 'create_scheduled', scan_ref: '__new__', payload, reason };
     }
 
-    try {
-        const res = await fetch('/api/stage', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        const json = await res.json();
-        if (json.success) {
-            showToast('Staged successfully! Review in Staging.', 'success');
-            updateStagingBadge();
-            setTimeout(() => { window.location.href = '/staging'; }, 1200);
-        } else {
-            showToast(json.error || 'Failed to stage', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
+    // Background staging (REQ-021) — toast fires async, redirect immediately
+    stageInBackground('/api/stage', body, MODE === 'launch' ? 'scan launch' : 'scan change');
+    window.location.href = '/staging';
 }
 
 function esc(text) {

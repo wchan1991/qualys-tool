@@ -22,11 +22,10 @@ Changes and feature requests for the Qualys Scan Manager.
 ---
 
 ## Proposed
-
 <!-- Add new requests here -->
 ### [REQ-013] Expansion - Import Function
 - **Type:** Feature
-- **Priority:** High
+- **Priority:** Medium
 - **Description:** Add in an import scan as a sub menu for the Scheduled Scans. I want to be able to import existing excel sheets of planned scans, have the platforma assess the changes, have the ability to make changes in the tool and  publish.
 - **Acceptance Criteria:** The acceptance criteria should be an existing submenu, the succesful interpretation of an excel sheet, seeing a single view of all the "scans" inside the sheet, setting accurate time and targets, and being able to control and publish.
 
@@ -47,6 +46,52 @@ Changes and feature requests for the Qualys Scan Manager.
 <!-- REQ-008 and REQ-009 moved to Done -->
 
 ## Done
+
+### [REQ-023] Scan View - Search enhancements
+- **Type:** Enhancement
+- **Priority:** High
+- **Completed:** 2026-04-15
+- **Description:** Wildcard/fuzzy search with autocomplete suggestions, expanded
+  to search option profile names and IDs.
+- **Changes:**
+  - `templates/scans.html`: search now uses regex with `*` wildcard support,
+    searches `title`, `ref`, `target`, and `option_profile`. Autocomplete
+    dropdown shows matching titles/profiles as you type (min 2 chars).
+  - `templates/scheduled.html`: same search upgrade — searches `title`,
+    `target`, `owner`, and `option_profile` with wildcard + autocomplete.
+  - `static/style.css`: added `.search-suggestions` and `.search-suggestion-item`
+    styles (dark/light mode aware).
+
+### [REQ-022] Update Option Profile Menu
+- **Type:** Enhancement
+- **Priority:** High
+- **Completed:** 2026-04-15
+- **Description:** Removed Beta column from profiles table, moved test/verify
+  into a sidebar, added bulk select + delete.
+- **Changes:**
+  - `templates/option_profiles.html`: Redesigned with two-panel layout —
+    main table (left) with checkboxes, per-row delete button, and bulk delete
+    bar; sidebar (right) with test resolution and info card. Removed redundant
+    Beta column (beta badge still shows inline in Title).
+  - `src/api_client.py`: added `delete_option_profile(profile_id)` method.
+  - `app.py`: added `POST /api/option-profiles/delete` endpoint accepting
+    `{ids: [...]}` with per-profile error handling + cache bust.
+
+### [REQ-021] Enhancing Staging Calls
+- **Type:** Enhancement
+- **Priority:** High
+- **Completed:** 2026-04-15
+- **Description:** All staging operations now run in the background — modals
+  close immediately on submit, POST fires async, toast notification appears
+  on completion, staging badge updates automatically.
+- **Changes:**
+  - `static/app.js`: added `stageInBackground(url, body, label)` helper —
+    fire-and-forget fetch with toast + badge update on resolve.
+  - Converted all 8 staging calls across 6 templates:
+    `scans.html` (2), `scheduled.html` (3), `scan_detail.html` (1),
+    `scheduled_detail.html` (1), `scan_form.html` (1).
+  - All `async function confirmStage/confirmAction/bulkAction` → synchronous
+    functions that close UI and call `stageInBackground()`.
 
 ### [REQ-020] Performance, staging dedup, nav restructure, dark mode, git hygiene
 - **Type:** Bug + Enhancement

@@ -13,8 +13,12 @@
 </div>
 
 <div class="filter-bar">
-    <input type="text" id="search-input" class="search-input"
-           placeholder="Search by title, target, or owner..." oninput="filterScans()">
+    <div class="search-wrap" style="position:relative;flex:1;min-width:220px">
+        <input type="text" id="search-input" class="search-input"
+               placeholder="Search title, target, profile… (use * for wildcard)"
+               oninput="onSearchInput()" autocomplete="off">
+        <div id="search-suggestions" class="search-suggestions hidden"></div>
+    </div>
     <select id="status-filter" class="filter-select" onchange="filterScans()">
         <option value="">All Status</option>
         <option value="active">Active</option>
@@ -360,25 +364,79 @@
         return buttons.join(' ');
     }
     
+    // ── REQ-023: Fuzzy/wildcard search + autocomplete ──────────
+    function buildSearchRegex(q) {
+        const escaped = q.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+        try { return new RegExp(escaped, 'i'); } catch { return null; }
+    }
+
+    function scanMatchesSearch(scan, re) {
+        if (!re) return true;
+        return re.test(scan.title || '') ||
+               re.test(scan.target || '') ||
+               re.test(scan.owner || '') ||
+               re.test(scan.option_profile || '');
+    }
+
     function filterScans() {
-        const searchTerm = document.getElementById('search-input').value.toLowerCase();
+        const q = document.getElementById('search-input').value.trim();
         const statusFilter = document.getElementById('status-filter').value.toLowerCase();
+        const re = q ? buildSearchRegex(q) : null;
 
         const filtered = allScans.filter(scan => {
-            const matchesSearch = !searchTerm ||
-                (scan.title || '').toLowerCase().includes(searchTerm) ||
-                (scan.target || '').toLowerCase().includes(searchTerm) ||
-                (scan.owner || '').toLowerCase().includes(searchTerm);
-
+            const matchesSearch = !re || scanMatchesSearch(scan, re);
             const key = schedGroupKey(scan);
             const matchesStatus = !statusFilter || key === statusFilter;
-
             return matchesSearch && matchesStatus;
         });
 
         clearSelection();
         renderScans(filtered);
     }
+
+    function onSearchInput() {
+        filterScans();
+        showSuggestions();
+    }
+
+    function showSuggestions() {
+        const q = document.getElementById('search-input').value.trim().toLowerCase();
+        const box = document.getElementById('search-suggestions');
+        if (!q || q.length < 2) { box.classList.add('hidden'); return; }
+        const seen = new Set();
+        const hits = [];
+        for (const s of allScans) {
+            for (const field of [s.title, s.option_profile, s.owner]) {
+                if (!field) continue;
+                const lower = field.toLowerCase();
+                if (lower.includes(q) && !seen.has(lower)) {
+                    seen.add(lower);
+                    hits.push(field);
+                    if (hits.length >= 8) break;
+                }
+            }
+            if (hits.length >= 8) break;
+        }
+        if (!hits.length) { box.classList.add('hidden'); return; }
+        box.innerHTML = hits.map(h =>
+            `<div class="search-suggestion-item" onmousedown="pickSuggestion(this)">${escapeHtml(h)}</div>`
+        ).join('');
+        box.classList.remove('hidden');
+    }
+
+    function pickSuggestion(el) {
+        document.getElementById('search-input').value = el.textContent;
+        document.getElementById('search-suggestions').classList.add('hidden');
+        filterScans();
+    }
+
+    // Hide suggestions on blur
+    document.addEventListener('DOMContentLoaded', () => {
+        const input = document.getElementById('search-input');
+        if (input) input.addEventListener('blur', () => {
+            setTimeout(() => document.getElementById('search-suggestions').classList.add('hidden'), 150);
+        });
+    });
 
     // ── Bulk selection (Feature 10) ──────────────────────────────
     function onCheckboxChange() {
@@ -510,7 +568,7 @@
         document.getElementById('profile-modal').classList.add('hidden');
     }
 
-    async function confirmProfileChange() {
+    function confirmProfileChange() {
         const checked = Array.from(document.querySelectorAll('.row-cb:checked'));
         const sel = document.getElementById('profile-select');
         const profileId = sel.value;
@@ -521,10 +579,6 @@
             showToast('Select a profile first', 'error');
             return;
         }
-        // Prevent double-click duplicates
-        const stageBtn = document.querySelector('#profile-modal .modal-footer .btn-primary');
-        if (stageBtn) stageBtn.disabled = true;
-
         const changes = checked.map(cb => ({
             action: 'modify_option_profile',
             scan_ref: cb.dataset.id,
@@ -533,41 +587,16 @@
             title: cb.dataset.title || '',
             reason,
         }));
-        try {
-            const res = await fetch('/api/stage/bulk', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ changes }),
-            });
-            const json = await res.json();
-            if (json.success) {
-                const msg = `Staged ${json.data.staged} profile changes`;
-                showToast(msg, 'success');
-                closeProfileModal();
-                clearSelection();
-                updateStagingBadge();
-                if (json.data.failed && json.data.failed.length) {
-                    console.warn('Some profile changes failed:', json.data.failed);
-                    showToast(`${json.data.failed.length} change(s) failed`, 'error');
-                }
-            } else {
-                showToast(json.error || 'Bulk profile change failed', 'error');
-            }
-        } catch (e) {
-            showToast('Network error', 'error');
-        } finally {
-            if (stageBtn) stageBtn.disabled = false;
-        }
+        // Close immediately — staging runs in background (REQ-021)
+        closeProfileModal();
+        clearSelection();
+        stageInBackground('/api/stage/bulk', { changes }, 'profile change(s)');
     }
 
-    async function bulkAction(action) {
+    function bulkAction(action) {
         const checked = Array.from(document.querySelectorAll('.row-cb:checked'));
         if (!checked.length) return;
         const reason = prompt(`Reason for bulk ${action} (optional):`) ?? '';
-
-        // Prevent double-click duplicates
-        const bulkBtns = document.querySelectorAll('#bulk-bar .btn');
-        bulkBtns.forEach(b => b.disabled = true);
 
         const changes = checked.map(cb => ({
             action,
@@ -575,26 +604,9 @@
             title: cb.dataset.title || '',
             reason,
         }));
-
-        try {
-            const res = await fetch('/api/stage/bulk', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ changes }),
-            });
-            const json = await res.json();
-            if (json.success) {
-                showToast(`Staged ${json.data.staged} changes`, 'success');
-                clearSelection();
-                updateStagingBadge();
-            } else {
-                showToast(json.error || 'Bulk stage failed', 'error');
-            }
-        } catch (e) {
-            showToast('Network error', 'error');
-        } finally {
-            bulkBtns.forEach(b => b.disabled = false);
-        }
+        // Close immediately — staging runs in background (REQ-021)
+        clearSelection();
+        stageInBackground('/api/stage/bulk', { changes }, `${action} change(s)`);
     }
     
     function openActionModal(action, scanId, title) {
@@ -642,39 +654,19 @@
         currentAction = null;
     }
     
-    async function confirmAction() {
+    function confirmAction() {
         if (!currentAction) return;
-        
         const reason = document.getElementById('reason-input').value;
-        const btn = document.getElementById('modal-confirm');
-        btn.disabled = true;
-        
-        try {
-            const response = await fetch('/api/stage', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    action: currentAction.action,
-                    scan_ref: currentAction.scanId,
-                    title: currentAction.title,
-                    reason: reason
-                })
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                showToast(`Staged: ${currentAction.action} for "${currentAction.title}"`, 'success');
-                closeModal();
-                updateStagingBadge();
-            } else {
-                showToast('Failed to stage: ' + result.error, 'error');
-            }
-        } catch (err) {
-            showToast('Network error staging action', 'error');
-        } finally {
-            btn.disabled = false;
-        }
+        const body = {
+            action: currentAction.action,
+            scan_ref: currentAction.scanId,
+            title: currentAction.title,
+            reason,
+        };
+        const label = `${currentAction.action} for "${currentAction.title}"`;
+        // Close immediately — staging runs in background (REQ-021)
+        closeModal();
+        stageInBackground('/api/stage', body, label);
     }
     
     function formatDate(dateStr) {

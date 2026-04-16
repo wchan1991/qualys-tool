@@ -111,6 +111,33 @@ function showToast(message, type = 'info') {
 }
 
 // ============================================================
+// BACKGROUND STAGING (REQ-021)
+// ============================================================
+// Fire-and-forget helper: close UI immediately, POST runs async,
+// toast + badge update on completion.
+
+function stageInBackground(url, body, label) {
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    })
+    .then(r => r.json())
+    .then(json => {
+        if (json.success) {
+            const n = json.data.staged ?? json.data.id ?? 1;
+            showToast(`Staged ${n} ${label}`, 'success');
+        } else {
+            showToast(json.error || `Staging failed: ${label}`, 'error');
+        }
+        updateStagingBadge();
+    })
+    .catch(() => {
+        showToast(`Network error staging ${label}`, 'error');
+    });
+}
+
+// ============================================================
 // UTILITIES
 // ============================================================
 

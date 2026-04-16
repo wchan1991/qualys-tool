@@ -9,68 +9,83 @@
     </div>
 </div>
 
-<div class="card" style="margin-bottom:12px">
-    <div class="card-body">
-        <p style="margin:0 0 8px 0">
-            Live list of VM option profiles in your Qualys subscription.
-            The <strong>ID</strong> column is what gets sent to Qualys when you
-            use the bulk <em>Change Profile</em> action — titles can be
-            ambiguous (e.g. <code>Foo</code> vs <code>Foo (beta)</code>),
-            so the app now resolves to an ID before applying.
-        </p>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input type="text" id="profile-search" class="search-input"
-                   placeholder="Filter by title or ID…" oninput="filterProfiles()"
-                   style="flex:1;min-width:220px">
-            <label style="display:flex;align-items:center;gap:4px;font-size:13px">
-                <input type="checkbox" id="beta-only" onchange="filterProfiles()">
-                Beta only
-            </label>
-        </div>
-    </div>
-</div>
+<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
 
-<!-- Verify / Test-resolution card ————————————————————————— -->
-<div class="card" style="margin-bottom:12px">
-    <div class="card-body">
-        <h3 style="margin-top:0">🧪 Test profile resolution</h3>
-        <p style="margin:4px 0 8px 0;font-size:13px" class="text-muted">
-            Enter a profile title (or ID) to see exactly which profile would
-            be applied to a scheduled scan. Use this before bulk-changing to
-            confirm the beta profile isn't colliding with a similarly-named
-            non-beta one.
-        </p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input type="text" id="verify-input" class="input"
-                   placeholder='e.g. "Authentication Profile (beta)"'
-                   style="flex:1;min-width:260px"
-                   onkeydown="if(event.key==='Enter')verifyProfile()">
-            <button class="btn btn-primary" onclick="verifyProfile()">Verify</button>
+    <!-- ── Main panel: profiles table ──────────────────────────── -->
+    <div style="flex:1;min-width:400px">
+        <div class="card" style="margin-bottom:12px">
+            <div class="card-body">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <input type="text" id="profile-search" class="search-input"
+                           placeholder="Filter by title or ID…" oninput="filterProfiles()"
+                           style="flex:1;min-width:220px">
+                </div>
+            </div>
         </div>
-        <div id="verify-result" style="margin-top:10px"></div>
-    </div>
-</div>
 
-<div class="card">
-    <div class="card-body">
-        <div class="table-scroll-wrap">
-            <table class="table data-table">
-                <thead>
-                    <tr>
-                        <th style="width:90px">ID</th>
-                        <th>Title</th>
-                        <th style="width:100px">Default</th>
-                        <th style="width:100px">Beta</th>
-                        <th style="width:120px">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="profiles-tbody">
-                    <tr><td colspan="5" class="text-muted text-center">Loading…</td></tr>
-                </tbody>
-            </table>
+        <!-- Bulk action bar -->
+        <div id="profile-bulk-bar" class="bulk-bar hidden" style="margin-bottom:12px">
+            <span class="bulk-count" id="profile-bulk-count">0 selected</span>
+            <button class="btn btn-sm btn-danger" onclick="bulkDeleteProfiles()">🗑 Delete Selected</button>
+            <button class="btn btn-sm btn-secondary" onclick="clearProfileSelection()">✕ Clear</button>
         </div>
-        <div id="profiles-count" class="text-muted" style="margin-top:8px;font-size:13px"></div>
+
+        <div class="card">
+            <div class="card-body">
+                <div class="table-scroll-wrap">
+                    <table class="table data-table">
+                        <thead>
+                            <tr>
+                                <th style="width:36px"><input type="checkbox" id="profile-select-all" onchange="toggleProfileSelectAll(this)"></th>
+                                <th style="width:90px">ID</th>
+                                <th>Title</th>
+                                <th style="width:100px">Default</th>
+                                <th style="width:120px">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="profiles-tbody">
+                            <tr><td colspan="5" class="text-muted text-center">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="profiles-count" class="text-muted" style="margin-top:8px;font-size:13px"></div>
+            </div>
+        </div>
     </div>
+
+    <!-- ── Sidebar: test/verify + info ─────────────────────────── -->
+    <div style="width:340px;min-width:280px;flex-shrink:0">
+        <div class="card" style="margin-bottom:12px">
+            <div class="card-body">
+                <h3 style="margin-top:0">🧪 Test Resolution</h3>
+                <p style="margin:4px 0 8px 0;font-size:13px" class="text-muted">
+                    Enter a title or ID to see which profile Qualys would apply.
+                    Catches collisions like <code>Foo</code> vs <code>Foo (beta)</code>.
+                </p>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <input type="text" id="verify-input" class="input"
+                           placeholder='Title or ID…'
+                           style="flex:1;min-width:160px"
+                           onkeydown="if(event.key==='Enter')verifyProfile()">
+                    <button class="btn btn-primary" onclick="verifyProfile()">Verify</button>
+                </div>
+                <div id="verify-result" style="margin-top:10px"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <h3 style="margin-top:0">ℹ️ About</h3>
+                <p style="font-size:13px;color:var(--text-secondary);margin:0">
+                    Profiles are fetched live from Qualys. The <strong>ID</strong>
+                    is what gets sent to the API when you bulk-change profiles
+                    on scheduled scans — titles can be ambiguous, so the app
+                    always resolves to an ID first.
+                </p>
+            </div>
+        </div>
+    </div>
+
 </div>
 {% endblock %}
 
@@ -95,9 +110,7 @@ async function loadProfiles() {
     }
 }
 
-function isBeta(p) {
-    return /\(\s*beta\s*\)/i.test(p.title || '');
-}
+function isBeta(p) { return /\(\s*beta\s*\)/i.test(p.title || ''); }
 function isDefault(p) {
     const d = String(p.default || '').trim().toLowerCase();
     return d === '1' || d === 'true';
@@ -105,9 +118,7 @@ function isDefault(p) {
 
 function filterProfiles() {
     const q = (document.getElementById('profile-search').value || '').toLowerCase();
-    const betaOnly = document.getElementById('beta-only').checked;
     const filtered = _allProfiles.filter(p => {
-        if (betaOnly && !isBeta(p)) return false;
         if (!q) return true;
         return (p.title || '').toLowerCase().includes(q) ||
                String(p.id || '').toLowerCase().includes(q);
@@ -126,19 +137,23 @@ function renderProfiles(profiles) {
     tbody.innerHTML = profiles.map(p => {
         const beta = isBeta(p);
         const def = isDefault(p);
+        const betaBadge = beta
+            ? '<span class="status-badge" style="background:#fef3c7;color:#92400e;margin-left:6px">beta</span>'
+            : '';
         return `
             <tr>
+                <td><input type="checkbox" class="profile-cb" data-id="${esc(String(p.id||''))}" onchange="onProfileCbChange()"></td>
                 <td><code>${esc(p.id || '—')}</code></td>
-                <td>
-                    <strong>${esc(p.title || '—')}</strong>
-                    ${beta ? '<span class="status-badge" style="background:#fef3c7;color:#92400e;margin-left:6px">beta</span>' : ''}
-                </td>
+                <td><strong>${esc(p.title || '—')}</strong>${betaBadge}</td>
                 <td>${def ? '<span class="status-badge status-active">✓ Default</span>' : '<span class="text-muted">—</span>'}</td>
-                <td>${beta ? '<span class="status-badge" style="background:#fef3c7;color:#92400e">beta</span>' : '<span class="text-muted">—</span>'}</td>
                 <td>
                     <button class="btn btn-small btn-secondary"
-                            onclick="verifyById(${JSON.stringify(String(p.id || '')).replace(/"/g,'&quot;')})">
+                            onclick="verifyById(${JSON.stringify(String(p.id||'')).replace(/"/g,'&quot;')})">
                         🧪 Test
+                    </button>
+                    <button class="btn btn-small btn-danger"
+                            onclick="deleteProfile(${JSON.stringify(String(p.id||'')).replace(/"/g,'&quot;')})">
+                        🗑
                     </button>
                 </td>
             </tr>
@@ -147,6 +162,81 @@ function renderProfiles(profiles) {
     countEl.textContent = `Showing ${profiles.length} of ${_allProfiles.length} profiles`;
 }
 
+// ── Bulk selection ──────────────────────────────────────────
+function onProfileCbChange() {
+    const checked = document.querySelectorAll('.profile-cb:checked');
+    const bar = document.getElementById('profile-bulk-bar');
+    document.getElementById('profile-bulk-count').textContent = `${checked.length} selected`;
+    bar.classList.toggle('hidden', checked.length === 0);
+    const all = document.querySelectorAll('.profile-cb');
+    const sa = document.getElementById('profile-select-all');
+    sa.checked = all.length > 0 && checked.length === all.length;
+    sa.indeterminate = checked.length > 0 && checked.length < all.length;
+}
+
+function toggleProfileSelectAll(master) {
+    document.querySelectorAll('.profile-cb').forEach(cb => cb.checked = master.checked);
+    onProfileCbChange();
+}
+
+function clearProfileSelection() {
+    document.querySelectorAll('.profile-cb').forEach(cb => cb.checked = false);
+    const sa = document.getElementById('profile-select-all');
+    if (sa) { sa.checked = false; sa.indeterminate = false; }
+    document.getElementById('profile-bulk-bar').classList.add('hidden');
+}
+
+// ── Delete ──────────────────────────────────────────────────
+async function deleteProfile(id) {
+    if (!confirm(`Delete option profile id=${id}? This cannot be undone.`)) return;
+    try {
+        const res = await fetch('/api/option-profiles/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: [id] }),
+        });
+        const json = await res.json();
+        if (json.success && json.data.deleted > 0) {
+            showToast('Profile deleted', 'success');
+            loadProfiles();
+        } else {
+            const err = (json.data && json.data.failed && json.data.failed[0])
+                ? json.data.failed[0].error : (json.error || 'Delete failed');
+            showToast(err, 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function bulkDeleteProfiles() {
+    const checked = Array.from(document.querySelectorAll('.profile-cb:checked'));
+    if (!checked.length) return;
+    const ids = checked.map(cb => cb.dataset.id);
+    if (!confirm(`Delete ${ids.length} option profile(s)? This cannot be undone.`)) return;
+    try {
+        const res = await fetch('/api/option-profiles/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+        });
+        const json = await res.json();
+        if (json.success) {
+            showToast(`Deleted ${json.data.deleted} profile(s)`, 'success');
+            if (json.data.failed.length) {
+                showToast(`${json.data.failed.length} failed`, 'error');
+            }
+            clearProfileSelection();
+            loadProfiles();
+        } else {
+            showToast(json.error || 'Bulk delete failed', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+// ── Test / Verify ───────────────────────────────────────────
 async function verifyProfile() {
     const needle = (document.getElementById('verify-input').value || '').trim();
     const out = document.getElementById('verify-result');
@@ -159,7 +249,7 @@ async function verifyProfile() {
         const res = await fetch('/api/option-profiles/resolve?q=' + encodeURIComponent(needle));
         const json = await res.json();
         if (!json.success) {
-            out.innerHTML = `<div class="alert alert-danger" style="padding:8px 12px;border-radius:4px;background:#fee2e2;color:#991b1b">
+            out.innerHTML = `<div style="padding:8px 12px;border-radius:4px;background:#fee2e2;color:#991b1b">
                 ❌ <strong>${esc(json.error || 'Resolution failed')}</strong>
             </div>`;
             return;
@@ -169,12 +259,11 @@ async function verifyProfile() {
             ? '<span class="status-badge" style="background:#fef3c7;color:#92400e;margin-left:6px">beta</span>'
             : '';
         out.innerHTML = `
-            <div class="alert" style="padding:10px 12px;border-radius:4px;background:#d1fae5;color:#065f46">
-                ✅ <strong>Match found — this is what Qualys would apply:</strong>
+            <div style="padding:10px 12px;border-radius:4px;background:#d1fae5;color:#065f46">
+                ✅ <strong>Match found:</strong>
                 <div style="margin-top:6px;font-family:monospace;font-size:13px">
-                    <div>Input:  <code>${esc(json.data.input)}</code></div>
-                    <div>→ ID:    <code>${esc(m.id)}</code></div>
-                    <div>→ Title: <strong>${esc(m.title)}</strong>${betaBadge}</div>
+                    <div>ID:    <code>${esc(m.id)}</code></div>
+                    <div>Title: <strong>${esc(m.title)}</strong>${betaBadge}</div>
                 </div>
             </div>
         `;
@@ -186,6 +275,8 @@ async function verifyProfile() {
 function verifyById(id) {
     document.getElementById('verify-input').value = id;
     verifyProfile();
+    // Scroll sidebar into view on mobile
+    document.getElementById('verify-input').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function esc(text) {

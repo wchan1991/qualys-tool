@@ -197,26 +197,11 @@ function closeModal() {
     document.getElementById('stage-modal').classList.add('hidden');
 }
 
-async function confirmStage() {
+function confirmStage() {
     const action = document.getElementById('stage-action').value;
     const reason = document.getElementById('stage-reason').value;
-    try {
-        const res = await fetch('/api/stage', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action, scan_ref: SCAN_REF, reason })
-        });
-        const json = await res.json();
-        if (json.success) {
-            showToast(`Staged: ${action}`, 'success');
-            closeModal();
-            updateStagingBadge();
-        } else {
-            showToast(json.error || 'Failed to stage', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
+    closeModal();
+    stageInBackground('/api/stage', { action, scan_ref: SCAN_REF, reason }, `${action}`);
 }
 
 function formatDate(d) {
