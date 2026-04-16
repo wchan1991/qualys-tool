@@ -20,24 +20,55 @@
             <a href="{{ url_for('lookup_page') }}" class="nav-link {% if request.endpoint == 'lookup_page' %}active{% endif %}">
                 🔎 Lookup
             </a>
-            <a href="{{ url_for('scans_page') }}" class="nav-link {% if request.endpoint == 'scans_page' %}active{% endif %}">
-                🏎️ Non-Scheduled
-            </a>
-            <a href="{{ url_for('scheduled_page') }}" class="nav-link {% if request.endpoint == 'scheduled_page' %}active{% endif %}">
-                🔄 Scheduled
-            </a>
-            <a href="{{ url_for('calendar_page') }}" class="nav-link {% if request.endpoint == 'calendar_page' %}active{% endif %}">
-                🗓️ Calendar
-            </a>
-            <a href="{{ url_for('tags_page') }}" class="nav-link {% if request.endpoint == 'tags_page' %}active{% endif %}">
-                🏷️ Tags
-            </a>
-            <a href="{{ url_for('scanners_page') }}" class="nav-link {% if request.endpoint == 'scanners_page' %}active{% endif %}">
-                🖥️ Scanners
-            </a>
-            <a href="{{ url_for('option_profiles_page') }}" class="nav-link {% if request.endpoint == 'option_profiles_page' %}active{% endif %}">
-                ⚙️ Profiles
-            </a>
+
+            {# ── Scans dropdown ── #}
+            {% set _scans_active = request.endpoint in ('scans_page','scan_detail_page','scheduled_page','scheduled_detail_page','scheduled_new_page','scheduled_edit_page','calendar_page') %}
+            <div class="nav-dropdown dropdown">
+                <button class="nav-dropdown-trigger nav-link {% if _scans_active %}active{% endif %}"
+                        data-dropdown="nav-scans-menu"
+                        onclick="toggleDropdown('nav-scans-menu')">
+                    📋 Scans ▾
+                </button>
+                <div id="nav-scans-menu" class="dropdown-menu nav-dropdown-menu hidden">
+                    <a href="{{ url_for('scans_page') }}"
+                       class="nav-dropdown-item {% if request.endpoint == 'scans_page' %}active{% endif %}">
+                        🏎️ Non-Scheduled
+                    </a>
+                    <a href="{{ url_for('scheduled_page') }}"
+                       class="nav-dropdown-item {% if request.endpoint in ('scheduled_page','scheduled_detail_page','scheduled_new_page','scheduled_edit_page') %}active{% endif %}">
+                        🔄 Scheduled
+                    </a>
+                    <a href="{{ url_for('calendar_page') }}"
+                       class="nav-dropdown-item {% if request.endpoint == 'calendar_page' %}active{% endif %}">
+                        🗓️ Calendar
+                    </a>
+                </div>
+            </div>
+
+            {# ── Scan Settings dropdown ── #}
+            {% set _settings_active = request.endpoint in ('tags_page','scanners_page','option_profiles_page') %}
+            <div class="nav-dropdown dropdown">
+                <button class="nav-dropdown-trigger nav-link {% if _settings_active %}active{% endif %}"
+                        data-dropdown="nav-settings-menu"
+                        onclick="toggleDropdown('nav-settings-menu')">
+                    ⚙️ Scan Settings ▾
+                </button>
+                <div id="nav-settings-menu" class="dropdown-menu nav-dropdown-menu hidden">
+                    <a href="{{ url_for('tags_page') }}"
+                       class="nav-dropdown-item {% if request.endpoint == 'tags_page' %}active{% endif %}">
+                        🏷️ Tags
+                    </a>
+                    <a href="{{ url_for('scanners_page') }}"
+                       class="nav-dropdown-item {% if request.endpoint == 'scanners_page' %}active{% endif %}">
+                        🖥️ Scanners
+                    </a>
+                    <a href="{{ url_for('option_profiles_page') }}"
+                       class="nav-dropdown-item {% if request.endpoint == 'option_profiles_page' %}active{% endif %}">
+                        ⚙️ Profiles
+                    </a>
+                </div>
+            </div>
+
             <a href="{{ url_for('changelog_page') }}" class="nav-link {% if request.endpoint == 'changelog_page' %}active{% endif %}">
                 📜 History
             </a>

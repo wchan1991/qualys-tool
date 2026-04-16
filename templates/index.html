@@ -154,7 +154,6 @@ function goToLookup(status) {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
-    loadNext48h();
     loadPast24hResults();
     loadTimeline();
     loadTrafficChart('past');
@@ -173,6 +172,20 @@ async function loadDashboard() {
             document.getElementById('metric-scheduled-total').textContent = d.total_scheduled ?? '--';
             document.getElementById('metric-scheduled-active').textContent = d.active_scheduled ?? '--';
             document.getElementById('metric-scheduled-inactive').textContent = d.inactive_scheduled ?? '--';
+
+            // Render next-48h card from same response (eliminates second /api/dashboard call)
+            const count48 = d.upcoming_48h ?? 0;
+            const container48 = document.getElementById('next-48h-card');
+            if (container48) {
+                container48.innerHTML = `
+                    <div class="results-summary">
+                        <div class="result-stat" style="background:rgba(59,130,246,0.1);border-radius:var(--radius);cursor:pointer" onclick="loadTrafficChart('48')">
+                            <div class="result-value" style="color:var(--accent)">${count48}</div>
+                            <div class="result-label">Scheduled Launches</div>
+                        </div>
+                    </div>
+                `;
+            }
         }
     } catch (e) {
         console.error('Failed to load dashboard:', e);
@@ -286,28 +299,6 @@ async function loadTrafficChart(mode = 'past') {
     }
 }
 
-async function loadNext48h() {
-    const container = document.getElementById('next-48h-card');
-    try {
-        const res = await fetch('/api/dashboard');
-        const json = await res.json();
-        if (!json.success) {
-            container.innerHTML = '<div class="text-muted text-center">Failed to load.</div>';
-            return;
-        }
-        const count = json.data.upcoming_48h ?? 0;
-        container.innerHTML = `
-            <div class="results-summary">
-                <div class="result-stat" style="background:rgba(59,130,246,0.1);border-radius:var(--radius);cursor:pointer" onclick="loadTrafficChart('48')">
-                    <div class="result-value" style="color:var(--accent)">${count}</div>
-                    <div class="result-label">Scheduled Launches</div>
-                </div>
-            </div>
-        `;
-    } catch (e) {
-        container.innerHTML = '<div class="text-muted text-center">Failed to load.</div>';
-    }
-}
 
 async function loadPast24hResults() {
     try {
@@ -539,7 +530,6 @@ async function refreshAll() {
             const d = json.data;
             showToast(`Refreshed ${d.scans} scans, ${d.scheduled} scheduled`, 'success');
             loadDashboard();
-            loadNext48h();
             loadPast24hResults();
             loadTimeline();
             loadTrafficChart(_chartMode);

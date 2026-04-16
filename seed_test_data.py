@@ -410,6 +410,56 @@ def seed():
             "old_value": "Error",
             "new_value": "Canceled",
         },
+        # ── Profile-change entries (test staging UI for REQ-019) ──
+        {
+            "scan_ref": "900001",
+            "change_type": ChangeType.MODIFY,
+            "description": "Change option profile to PCI Quarterly External (beta) (id=12345)",
+            "scan_type": "scheduled",
+            "old_value": '{"option_profile": "Initial Options"}',
+            "new_value": '{"option_id": "12345", "option_title": "PCI Quarterly External (beta)"}',
+            "payload": {
+                "scan_id": "900001",
+                "current": {"title": "Weekly PCI Compliance"},
+                "changes": {
+                    "option_id": "12345",
+                    "option_title": "PCI Quarterly External (beta)",
+                    "option_profile": "PCI Quarterly External (beta)",
+                },
+            },
+        },
+        {
+            "scan_ref": "900003",
+            "change_type": ChangeType.MODIFY,
+            "description": "Change option profile to Full Audit (id=67890)",
+            "scan_type": "scheduled",
+            "old_value": '{"option_profile": "Patch Tuesday"}',
+            "new_value": '{"option_id": "67890", "option_title": "Full Audit"}',
+            "payload": {
+                "scan_id": "900003",
+                "current": {"title": "Patch Tuesday Scan"},
+                "changes": {
+                    "option_id": "67890",
+                    "option_title": "Full Audit",
+                    "option_profile": "Full Audit",
+                },
+            },
+        },
+        {
+            "scan_ref": "900005",
+            "change_type": ChangeType.MODIFY,
+            "description": "Change option profile to Cloud Discovery",
+            "scan_type": "scheduled",
+            "old_value": '{"option_profile": "Standard"}',
+            "new_value": '{"option_profile": "Cloud Discovery"}',
+            "payload": {
+                "scan_id": "900005",
+                "current": {"title": "Cloud Infrastructure Weekly"},
+                "changes": {
+                    "option_profile": "Cloud Discovery",
+                },
+            },
+        },
     ]
 
     for s in staged:
@@ -420,6 +470,7 @@ def seed():
             scan_type=s["scan_type"],
             old_value=s["old_value"],
             new_value=s["new_value"],
+            payload=s.get("payload"),
         )
     print(f"  Inserted {len(staged)} staged changes")
 

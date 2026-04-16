@@ -60,7 +60,7 @@
             <!-- Shows the *exact* profile (ID + title) that will be sent to
                  Qualys, so the user can verify they picked the beta one and
                  not a similarly-named non-beta one. -->
-            <div id="profile-preview" style="margin-top:8px;padding:8px 10px;border-radius:4px;background:#f3f4f6;font-size:13px;font-family:monospace;display:none">
+            <div id="profile-preview" style="margin-top:8px;padding:8px 10px;border-radius:4px;background:var(--bg-tertiary);font-size:13px;font-family:monospace;display:none">
                 <div><strong>Will apply:</strong></div>
                 <div>ID:    <code id="profile-preview-id">—</code></div>
                 <div>Title: <span id="profile-preview-title">—</span></div>
@@ -521,11 +521,13 @@
             showToast('Select a profile first', 'error');
             return;
         }
+        // Prevent double-click duplicates
+        const stageBtn = document.querySelector('#profile-modal .modal-footer .btn-primary');
+        if (stageBtn) stageBtn.disabled = true;
+
         const changes = checked.map(cb => ({
             action: 'modify_option_profile',
             scan_ref: cb.dataset.id,
-            // Send BOTH — the backend prefers the ID (unambiguous) and uses
-            // the title purely for the staged change description.
             option_id: profileId,
             option_profile: profileTitle,
             title: cb.dataset.title || '',
@@ -539,20 +541,22 @@
             });
             const json = await res.json();
             if (json.success) {
-                const msg = `Staged ${json.data.staged} profile changes → ${profileTitle} (id=${profileId})`;
+                const msg = `Staged ${json.data.staged} profile changes`;
                 showToast(msg, 'success');
                 closeProfileModal();
                 clearSelection();
                 updateStagingBadge();
                 if (json.data.failed && json.data.failed.length) {
                     console.warn('Some profile changes failed:', json.data.failed);
-                    showToast(`${json.data.failed.length} change(s) failed — see console`, 'error');
+                    showToast(`${json.data.failed.length} change(s) failed`, 'error');
                 }
             } else {
                 showToast(json.error || 'Bulk profile change failed', 'error');
             }
         } catch (e) {
             showToast('Network error', 'error');
+        } finally {
+            if (stageBtn) stageBtn.disabled = false;
         }
     }
 
@@ -560,6 +564,10 @@
         const checked = Array.from(document.querySelectorAll('.row-cb:checked'));
         if (!checked.length) return;
         const reason = prompt(`Reason for bulk ${action} (optional):`) ?? '';
+
+        // Prevent double-click duplicates
+        const bulkBtns = document.querySelectorAll('#bulk-bar .btn');
+        bulkBtns.forEach(b => b.disabled = true);
 
         const changes = checked.map(cb => ({
             action,
@@ -584,6 +592,8 @@
             }
         } catch (e) {
             showToast('Network error', 'error');
+        } finally {
+            bulkBtns.forEach(b => b.disabled = false);
         }
     }
     

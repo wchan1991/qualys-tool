@@ -2,3 +2,6 @@ logs/
 backups/
 .claude/
 config/config
+data/qualys_scans.db
+__pycache__/
+*.pyc

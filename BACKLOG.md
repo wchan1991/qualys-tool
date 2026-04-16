@@ -48,6 +48,43 @@ Changes and feature requests for the Qualys Scan Manager.
 
 ## Done
 
+### [REQ-020] Performance, staging dedup, nav restructure, dark mode, git hygiene
+- **Type:** Bug + Enhancement
+- **Priority:** High
+- **Completed:** 2026-04-15
+- **Description:** Batch of 7 improvements to reduce API calls, fix duplicate
+  staging entries, protect production DB from git overwrites, fix dark mode
+  colors, and consolidate nav tabs.
+- **Changes:**
+  - **P0 — Staging dedup**: `src/database.py` `stage_change()` now checks for
+    existing pending row `(scan_ref, change_type, applied=0)` before INSERT.
+    Returns existing ID if found. `templates/scheduled.html` disables bulk
+    buttons during fetch to prevent double-click.
+  - **P1a — Dashboard double-fetch**: Merged `loadNext48h()` into
+    `loadDashboard()` in `templates/index.html` — one `/api/dashboard` call
+    instead of two per page load.
+  - **P1b — Forecast reuse**: `src/scan_manager.py` `get_launch_forecast()`
+    accepts optional `scheduled=` param. `get_dashboard()` passes its
+    already-fetched list, eliminating a redundant DB read.
+  - **P1c — Health cache**: `app.py` health endpoint now uses
+    `get_target_sources()` (5-min TTL cache) instead of a live
+    `list_option_profiles()` call every 60 seconds.
+  - **P1d — Scanners cache**: `get_scanners()` routes through
+    `get_target_sources()` cache instead of hitting the Qualys API directly.
+  - **P2 — .gitignore**: Added `data/qualys_scans.db`, `__pycache__/`, `*.pyc`.
+    Untracked DB from git. Added `data/.gitkeep`. Git pull no longer overwrites
+    production scan database.
+  - **P3 — Dark mode**: Replaced hardcoded inline colors in `scheduled.html`,
+    `staging.html` with CSS variables (`--bg-tertiary`, `--text-secondary`,
+    `--danger`).
+  - **P4 — Nav restructure**: Consolidated 10 flat nav tabs into grouped
+    dropdowns: `[Scans ▾]` (Non-Scheduled, Scheduled, Calendar) and
+    `[Scan Settings ▾]` (Tags, Scanners, Profiles). `templates/base.html` +
+    `static/style.css`.
+  - **P5 — Seed data**: Added 3 MODIFY staged entries to `seed_test_data.py`
+    with profile-change payloads (2 with resolved ID, 1 title-only for
+    warning-path testing).
+
 ### [REQ-019] Option Profiles tab + fix bulk change picking wrong profile
 - **Type:** Bug + Feature
 - **Priority:** High

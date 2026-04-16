@@ -752,6 +752,22 @@ class ScanDatabase:
             ID of the staged change
         """
         cursor = self.conn.cursor()
+
+        # ── Dedup guard: skip if an identical pending change already exists.
+        # Prevents duplicates from double-clicks or modal re-fires.
+        cursor.execute("""
+            SELECT id FROM staged_changes
+            WHERE scan_ref = ? AND change_type = ? AND applied = 0
+            LIMIT 1
+        """, (scan_ref, change_type.value))
+        existing = cursor.fetchone()
+        if existing:
+            logger.info(
+                f"Dedup: pending {change_type.value} on {scan_type}/{scan_ref} "
+                f"already staged (id={existing[0]}), skipping"
+            )
+            return existing[0]
+
         now = datetime.now().astimezone().isoformat()
         payload_json = json.dumps(payload) if payload is not None else None
 

@@ -156,8 +156,8 @@ class ScanManager:
         }
     
     def get_scanners(self) -> List[Dict[str, Any]]:
-        """Get scanner appliances."""
-        return self.client.list_scanners()
+        """Get scanner appliances (served from the 5-min TTL cache)."""
+        return self.get_target_sources().get("scanners", [])
     
     # ========================================================
     # STAGING OPERATIONS - RUNNING SCANS
@@ -590,10 +590,17 @@ class ScanManager:
             return self._ondemand_events(start_dt, end_dt)
         return self._scheduled_events(start_dt, end_dt)
 
-    def get_launch_forecast(self, hours: int = 24) -> List[Dict[str, Any]]:
+    def get_launch_forecast(
+        self, hours: int = 24, scheduled: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
         """
         F20: project active scheduled scans forward into hourly buckets so
         the dashboard chart can show "next 24/48/72h" forecasts.
+
+        Args:
+            hours: number of hours to forecast
+            scheduled: optional pre-fetched scheduled scans list to avoid
+                       a redundant DB/API call when the caller already has it
 
         Returns a list of {hour, count} dicts ordered by time.
         """
@@ -605,7 +612,8 @@ class ScanManager:
         for h in range(hours):
             buckets[now + timedelta(hours=h)] = 0
 
-        scheduled = self.get_scheduled_scans()
+        if scheduled is None:
+            scheduled = self.get_scheduled_scans()
         for scan in scheduled:
             if not scan.get("active"):
                 continue
@@ -832,8 +840,9 @@ class ScanManager:
         inactive_scheduled = len(scheduled) - active_scheduled
 
         # Count scheduled scan launches in the next 48 hours
+        # Pass the already-fetched list to avoid a redundant DB read.
         try:
-            forecast_48h = self.get_launch_forecast(48)
+            forecast_48h = self.get_launch_forecast(48, scheduled=scheduled)
             upcoming_48h = sum(b["count"] for b in forecast_48h)
         except Exception:
             upcoming_48h = 0

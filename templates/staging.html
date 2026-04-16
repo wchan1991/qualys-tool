@@ -134,12 +134,12 @@ function renderStaged(changes) {
                     const t = ch.option_title || ch.option_profile || '';
                     parts.push(
                         `Profile → <em>${escapeHtml(t)}</em> ` +
-                        `<code style="font-size:0.75rem;color:#6b7280">id=${escapeHtml(String(ch.option_id))}</code>`
+                        `<code style="font-size:0.75rem;color:var(--text-secondary)">id=${escapeHtml(String(ch.option_id))}</code>`
                     );
                 } else if (ch.option_profile) {
                     parts.push(
                         `Profile → <em>${escapeHtml(ch.option_profile)}</em> ` +
-                        `<span style="color:#b91c1c;font-size:0.75rem">⚠ no ID — title-only match</span>`
+                        `<span style="color:var(--danger);font-size:0.75rem">⚠ no ID — title-only match</span>`
                     );
                 }
                 extraDetail = parts.length ? `<div style="font-size:0.8rem;color:var(--text-muted,#666);margin-top:0.2rem">${parts.join(' · ')}</div>` : '';

@@ -349,11 +349,13 @@ def api_health():
 
     try:
         manager = get_manager()
-        profiles = manager.client.list_option_profiles()
+        # Use cached target-sources (5-min TTL) instead of a live API call
+        # per health check — avoids hammering Qualys every 60 seconds.
+        ts = manager.get_target_sources()
         return {
             "status": "connected",
             "api_url": config.api_url,
-            "profiles": len(profiles),
+            "profiles": len(ts.get("option_profiles", [])),
             "offline": _offline_mode,
         }
     except QualysError as e:
